@@ -103,6 +103,74 @@ describe("game setup", () => {
     duplicateTokens.players[1]!.reconnectToken = "token-a";
     expectRuleError(() => createGame(duplicateTokens), "invalid-setup");
   });
+
+  it("supports player IDs that overlap object prototype properties", () => {
+    const playerIds = ["__proto__", "constructor", "toString"];
+    const created = createGame(setup(playerIds));
+
+    expect(Object.getPrototypeOf(created.players)).toBeNull();
+    expect(playerIds.every((playerId) => Object.hasOwn(created.players, playerId)))
+      .toBe(true);
+    expectRuleError(
+      () =>
+        submitInitialSelection(
+          created,
+          "valueOf",
+          playerCardId("valueOf", "valueOf"),
+        ),
+      "unknown-player",
+    );
+
+    let game = submitInitialSelection(
+      created,
+      "__proto__",
+      pauseCardId("__proto__"),
+    );
+    game = submitInitialSelection(
+      game,
+      "constructor",
+      playerCardId("constructor", "constructor"),
+    );
+    game = submitInitialSelection(
+      game,
+      "toString",
+      playerCardId("toString", "toString"),
+    );
+
+    expect(game.round.phase).toBe("pause-selection");
+    expect(Object.getPrototypeOf(game.round.initialSelections)).toBeNull();
+    expect(Object.getPrototypeOf(game.round.revealedInitialSelections)).toBeNull();
+
+    game = submitPauseSelection(
+      game,
+      "__proto__",
+      playerCardId("__proto__", "__proto__"),
+    );
+
+    expect(game.round.phase).toBe("resolved");
+    expect(Object.getPrototypeOf(game.round.pauseSelections)).toBeNull();
+    expect(Object.getPrototypeOf(game.round.revealedPauseSelections)).toBeNull();
+    expect(Object.getPrototypeOf(game.round.resolution?.playerResults)).toBeNull();
+    for (const playerId of playerIds) {
+      expect(Object.hasOwn(game.round.resolution!.playerResults, playerId))
+        .toBe(true);
+      expect(game.round.resolution?.playerResults[playerId]).toMatchObject({
+        status: "connected",
+      });
+    }
+
+    const publicState = toPublicGameState(game);
+    expect(Object.getPrototypeOf(publicState.players)).toBeNull();
+    expect(publicState.round.initialSelectionsSubmittedBy).toEqual(playerIds);
+    expect(publicState.round.pauseSelectionsSubmittedBy).toEqual(["__proto__"]);
+    expect(
+      Object.getPrototypeOf(publicState.round.revealedInitialSelections),
+    ).toBeNull();
+    expect(Object.getPrototypeOf(publicState.round.revealedPauseSelections))
+      .toBeNull();
+    expect(Object.getPrototypeOf(publicState.round.resolution?.playerResults))
+      .toBeNull();
+  });
 });
 
 describe("initial selection and resolution", () => {

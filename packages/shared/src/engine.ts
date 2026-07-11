@@ -39,6 +39,61 @@ export class GameRuleError extends Error {
   }
 }
 
+function createPlayerRecord<T>(): Record<PlayerId, T> {
+  return Object.create(null) as Record<PlayerId, T>;
+}
+
+function setPlayerRecordValue<T>(
+  record: Partial<Record<PlayerId, T>>,
+  playerId: PlayerId,
+  value: T,
+): void {
+  Object.defineProperty(record, playerId, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
+function copyPlayerRecord<T>(
+  source: Partial<Record<PlayerId, T>>,
+): Record<PlayerId, T> {
+  const copy = createPlayerRecord<T>();
+  for (const playerId of Object.keys(source)) {
+    const value = source[playerId];
+    if (value !== undefined) {
+      setPlayerRecordValue<T>(copy, playerId, value);
+    }
+  }
+  return copy;
+}
+
+function cloneGameState(state: GameState): GameState {
+  const clone = structuredClone(state);
+  clone.players = copyPlayerRecord(clone.players);
+  clone.round.initialSelections = copyPlayerRecord(
+    clone.round.initialSelections,
+  );
+  clone.round.pauseSelections = copyPlayerRecord(clone.round.pauseSelections);
+  if (clone.round.revealedInitialSelections) {
+    clone.round.revealedInitialSelections = copyPlayerRecord(
+      clone.round.revealedInitialSelections,
+    );
+  }
+  if (clone.round.revealedPauseSelections) {
+    clone.round.revealedPauseSelections = copyPlayerRecord(
+      clone.round.revealedPauseSelections,
+    );
+  }
+  if (clone.round.resolution) {
+    clone.round.resolution.playerResults = copyPlayerRecord(
+      clone.round.resolution.playerResults,
+    );
+  }
+  return clone;
+}
+
 export function playerCardId(ownerId: PlayerId, targetId: PlayerId): CardId {
   return `player:${ownerId}:${targetId}`;
 }
@@ -86,10 +141,10 @@ function createRound(number: number): RoundState {
   return {
     number,
     phase: "initial-selection",
-    initialSelections: {},
+    initialSelections: createPlayerRecord(),
     revealedInitialSelections: null,
     pausePlayerIds: [],
-    pauseSelections: {},
+    pauseSelections: createPlayerRecord(),
     revealedPauseSelections: null,
     resolution: null,
   };
@@ -123,17 +178,15 @@ export function createGame(setup: GameSetup): GameState {
     "Reconnect tokens",
   );
 
-  const players = Object.fromEntries(
-    setup.players.map((player): [PlayerId, GamePlayer] => [
-      player.id,
-      {
-        ...player,
-        connected: true,
-        hand: createPlayerCards(player.id, playerOrder, setup.exoplanets),
-        playedCards: [],
-      },
-    ]),
-  );
+  const players = createPlayerRecord<GamePlayer>();
+  for (const player of setup.players) {
+    setPlayerRecordValue<GamePlayer>(players, player.id, {
+      ...player,
+      connected: true,
+      hand: createPlayerCards(player.id, playerOrder, setup.exoplanets),
+      playedCards: [],
+    });
+  }
 
   return {
     id: setup.id,
@@ -145,6 +198,9 @@ export function createGame(setup: GameSetup): GameState {
 }
 
 function getPlayer(state: GameState, playerId: PlayerId): GamePlayer {
+  if (!Object.hasOwn(state.players, playerId)) {
+    throw new GameRuleError("unknown-player", `Unknown player: ${playerId}`);
+  }
   const player = state.players[playerId];
   if (!player) {
     throw new GameRuleError("unknown-player", `Unknown player: ${playerId}`);
@@ -156,22 +212,25 @@ function allPlayersSubmitted(
   playerIds: PlayerId[],
   selections: Partial<Record<PlayerId, SelectionCard>>,
 ): boolean {
-  return playerIds.every((playerId) => selections[playerId] !== undefined);
+  return playerIds.every((playerId) => Object.hasOwn(selections, playerId));
 }
 
 function revealSelections<T extends SelectionCard>(
   playerIds: PlayerId[],
   selections: Partial<Record<PlayerId, T>>,
 ): Record<PlayerId, T> {
-  return Object.fromEntries(
-    playerIds.map((playerId) => {
-      const selection = selections[playerId];
-      if (!selection) {
-        throw new Error(`Selection missing for ${playerId}`);
-      }
-      return [playerId, selection];
-    }),
-  );
+  const revealed = createPlayerRecord<T>();
+  for (const playerId of playerIds) {
+    if (!Object.hasOwn(selections, playerId)) {
+      throw new Error(`Selection missing for ${playerId}`);
+    }
+    const selection = selections[playerId];
+    if (!selection) {
+      throw new Error(`Selection missing for ${playerId}`);
+    }
+    setPlayerRecordValue(revealed, playerId, selection);
+  }
+  return revealed;
 }
 
 function playCard(player: GamePlayer, card: SelectionCard): void {
@@ -190,7 +249,7 @@ export function submitInitialSelection(
       "Initial selections are closed for this round",
     );
   }
-  if (current.round.initialSelections[playerId]) {
+  if (Object.hasOwn(current.round.initialSelections, playerId)) {
     throw new GameRuleError(
       "choice-already-submitted",
       "This player already submitted an initial selection",
@@ -206,8 +265,8 @@ export function submitInitialSelection(
     );
   }
 
-  const next = structuredClone(current);
-  next.round.initialSelections[playerId] = card;
+  const next = cloneGameState(current);
+  setPlayerRecordValue(next.round.initialSelections, playerId, card);
   if (!allPlayersSubmitted(next.playerOrder, next.round.initialSelections)) {
     return next;
   }
@@ -249,7 +308,7 @@ export function submitPauseSelection(
       "Only a player who revealed pause may submit a follow-up",
     );
   }
-  if (current.round.pauseSelections[playerId]) {
+  if (Object.hasOwn(current.round.pauseSelections, playerId)) {
     throw new GameRuleError(
       "choice-already-submitted",
       "This player already submitted a pause follow-up",
@@ -271,8 +330,8 @@ export function submitPauseSelection(
     );
   }
 
-  const next = structuredClone(current);
-  next.round.pauseSelections[playerId] = card;
+  const next = cloneGameState(current);
+  setPlayerRecordValue(next.round.pauseSelections, playerId, card);
   if (
     !allPlayersSubmitted(
       next.round.pausePlayerIds,
@@ -459,7 +518,7 @@ function resolveRound(state: GameState): RoundResolution {
     state.round.revealedPauseSelections,
   );
   const byPlayer = new Map<PlayerId, Connection>();
-  const playerResults: Record<PlayerId, PlayerResult> = {};
+  const playerResults = createPlayerRecord<PlayerResult>();
 
   for (const playerId of state.playerOrder) {
     const connection = connectionForPlayer(
@@ -470,12 +529,15 @@ function resolveRound(state: GameState): RoundResolution {
     );
     if (connection) {
       byPlayer.set(playerId, connection);
-      playerResults[playerId] = { status: "connected", connection };
+      setPlayerRecordValue<PlayerResult>(playerResults, playerId, {
+        status: "connected",
+        connection,
+      });
     } else {
-      playerResults[playerId] = {
+      setPlayerRecordValue<PlayerResult>(playerResults, playerId, {
         status: "failed",
         reason: failureReason(state, playerId, initialClaims),
-      };
+      });
     }
   }
 
@@ -516,38 +578,35 @@ export function startNextRound(current: GameState): GameState {
       "A new round can start only after resolution",
     );
   }
-  const next = structuredClone(current);
+  const next = cloneGameState(current);
   next.round = createRound(current.round.number + 1);
   return next;
 }
 
 export function toPublicGameState(state: GameState): PublicGameState {
-  const { initialSelections, pauseSelections, ...round } = state.round;
-  const players = Object.fromEntries(
-    state.playerOrder.map((playerId) => {
-      const player = state.players[playerId]!;
-      return [
-        playerId,
-        {
-          id: player.id,
-          name: player.name,
-          connected: player.connected,
-          playedCards: structuredClone(player.playedCards),
-          handSize: player.hand.length,
-        },
-      ];
-    }),
-  );
+  const clone = cloneGameState(state);
+  const { initialSelections, pauseSelections, ...round } = clone.round;
+  const players = createPlayerRecord<PublicGameState["players"][PlayerId]>();
+  for (const playerId of clone.playerOrder) {
+    const player = clone.players[playerId]!;
+    setPlayerRecordValue(players, playerId, {
+      id: player.id,
+      name: player.name,
+      connected: player.connected,
+      playedCards: player.playedCards,
+      handSize: player.hand.length,
+    });
+  }
   return {
-    ...structuredClone(state),
+    ...clone,
     players,
     round: {
-      ...structuredClone(round),
+      ...round,
       initialSelectionsSubmittedBy: state.playerOrder.filter(
-        (playerId) => initialSelections[playerId] !== undefined,
+        (playerId) => Object.hasOwn(initialSelections, playerId),
       ),
       pauseSelectionsSubmittedBy: state.round.pausePlayerIds.filter(
-        (playerId) => pauseSelections[playerId] !== undefined,
+        (playerId) => Object.hasOwn(pauseSelections, playerId),
       ),
     },
   };
