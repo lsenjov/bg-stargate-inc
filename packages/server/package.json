@@ -1,0 +1,18 @@
+{
+  "name": "@stargate-inc/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --build --pretty false"
+  },
+  "dependencies": {
+    "@stargate-inc/shared": "*"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.3"
+  }
+}
