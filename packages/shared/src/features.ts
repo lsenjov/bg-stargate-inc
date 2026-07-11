@@ -19,8 +19,8 @@ export const gameFeatures = [
     id: "online-lobbies",
     area: "online-play",
     name: "Online lobbies and reconnection",
-    status: "planned",
-    rule: "Players will join a server-hosted lobby and reconnect to an active game.",
+    status: "playable",
+    rule: "Players create or join a server-hosted lobby for 3 to 8 players and can securely reconnect to their seat.",
   },
   {
     id: "secret-simultaneous-selection",

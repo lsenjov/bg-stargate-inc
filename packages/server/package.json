@@ -11,9 +11,11 @@
     "typecheck": "tsc --build --pretty false"
   },
   "dependencies": {
-    "@stargate-inc/shared": "*"
+    "@stargate-inc/shared": "*",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
+    "socket.io-client": "^4.8.3",
     "tsx": "^4.20.3"
   }
 }

@@ -16,6 +16,7 @@ describe("feature manifest", () => {
 
   it("marks every implemented connection rule as playable", () => {
     expect(playableFeatureIds).toEqual([
+      "online-lobbies",
       "secret-simultaneous-selection",
       "played-card-exhaustion",
       "pause-follow-up",
