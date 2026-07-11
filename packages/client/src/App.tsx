@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -9,10 +10,11 @@ import {
 
 import {
   gameFeatures,
+  groupFeaturesByArea,
+  summarizeFeatureScope,
   type CommandError,
   type CommandResult,
   type Connection,
-  type GameFeature,
   type LobbyView,
   type PlayerId,
   type PlayerResult,
@@ -55,8 +57,16 @@ function saveSession(data: SessionData): SavedSession {
   return saved;
 }
 
-function clearSession(): void {
+function sameSession(left: SavedSession | null, right: SavedSession): boolean {
+  return left?.lobbyId === right.lobbyId &&
+    left.playerId === right.playerId &&
+    left.reconnectToken === right.reconnectToken;
+}
+
+function clearSession(expected?: SavedSession): boolean {
+  if (expected && !sameSession(loadSession(), expected)) return false;
   localStorage.removeItem(sessionKey);
+  return true;
 }
 
 function initialJoinCode(): string {
@@ -164,7 +174,8 @@ export function App({ socket: suppliedSocket }: AppProps) {
       if (!reconnecting) setConnection("online");
     };
     const onReplaced = () => {
-      clearSession();
+      const ownedSession = sessionRef.current;
+      if (ownedSession) clearSession(ownedSession);
       sessionRef.current = null;
       setSavedSession(null);
       setView(null);
@@ -217,8 +228,18 @@ export function App({ socket: suppliedSocket }: AppProps) {
     });
   };
 
-  const openRulebook = () => setRulebookOpen(true);
-  const closeRulebook = () => setRulebookOpen(false);
+  const openRulebook = useCallback(() => setRulebookOpen(true), []);
+  const closeRulebook = useCallback(() => setRulebookOpen(false), []);
+  const returnHome = () => {
+    setReplaced(false);
+    setError(null);
+    if (socket.connected) {
+      setConnection("online");
+    } else {
+      setConnection("connecting");
+      socket.connect();
+    }
+  };
   const unavailable = connection !== "online" || pending !== null;
 
   return (
@@ -241,7 +262,7 @@ export function App({ socket: suppliedSocket }: AppProps) {
       {error && <div className="error-banner" role="alert" tabIndex={-1} ref={errorRef}><strong>Couldn’t complete that action.</strong> {error}<button aria-label="Dismiss error" onClick={() => setError(null)}>×</button></div>}
 
       {replaced ? (
-        <main className="center-stage"><EmptyState title="Seat moved" body="This seat is active in another browser. Return home to join with a different seat." action={<button className="primary-button" onClick={() => { setReplaced(false); setError(null); }}>Return home</button>} /></main>
+        <main className="center-stage"><EmptyState title="Seat moved" body="This seat is active in another browser. Return home to join with a different seat." action={<button className="primary-button" onClick={returnHome}>Return home</button>} /></main>
       ) : view ? (
         view.lobby.status === "waiting"
           ? <LobbyScreen socket={socket} view={view} unavailable={unavailable} pending={pending} run={run} />
@@ -336,6 +357,17 @@ function GameScreen({ socket, view, unavailable, pending, run }: { socket: GameS
   const eligibleCards = round.phase === "pause-selection" ? view.self.hand.filter(({ kind }) => kind !== "pause") : view.self.hand;
   const submittedCount = round.phase === "initial-selection" ? round.initialSelectionsSubmittedBy.length : round.pauseSelectionsSubmittedBy.length;
   const expectedCount = round.phase === "initial-selection" ? game.playerOrder.length : round.pausePlayerIds.length;
+  const selectionCardId = round.phase === "pause-selection"
+    ? view.self.pauseSelectionCardId
+    : view.self.initialSelectionCardId;
+  const meter = round.phase === "resolved"
+    ? { label: "Round resolved", value: "DONE", status: "RESOLVED", progress: 100 }
+    : {
+        label: `${submittedCount} of ${expectedCount} selections submitted`,
+        value: `${submittedCount}/${expectedCount}`,
+        status: "LOCKED IN",
+        progress: expectedCount ? submittedCount / expectedCount * 100 : 0,
+      };
   const phaseTitle = round.phase === "initial-selection" ? "Choose your connection" : round.phase === "pause-selection" ? isPausePlayer ? "Choose after the pause" : "Pause players are choosing" : "Connections resolved";
   const phaseBody = round.phase === "initial-selection" ? "Your choice stays secret until everyone has locked in." : round.phase === "pause-selection" ? "Initial choices are revealed. Pause follow-ups remain secret until all pause players submit." : "Review the network outcome, then begin another round.";
 
@@ -348,8 +380,8 @@ function GameScreen({ socket, view, unavailable, pending, run }: { socket: GameS
   };
 
   return <main className="game-layout">
-    <section className="game-heading"><div><div className="eyebrow">ROUND {String(round.number).padStart(2, "0")} // {round.phase.replace("-", " ").toUpperCase()}</div><h1>{phaseTitle}</h1><p>{phaseBody}</p></div><div className="submission-meter" aria-label={`${submittedCount} of ${expectedCount} selections submitted`}><strong>{submittedCount}/{expectedCount}</strong><span>LOCKED IN</span><div><i style={{ width: `${expectedCount ? submittedCount / expectedCount * 100 : 0}%` }} /></div></div></section>
-    {mayChoose && <section className="panel hand-panel" aria-labelledby="hand-title"><div className="section-title"><div><div className="eyebrow">PRIVATE // ONLY YOU CAN SEE THIS</div><h2 id="hand-title">Your hand</h2></div>{selfSubmitted && <span className="locked-label">✓ Selection locked</span>}</div>{eligibleCards.length ? <div className="card-grid">{eligibleCards.map((card) => <button className={`game-card ${card.kind} ${selfSubmitted && ((view.self.initialSelectionCardId ?? view.self.pauseSelectionCardId) === card.id) ? "selected" : ""}`} key={card.id} disabled={unavailable || selfSubmitted} onClick={() => submit(card)}><span className="card-type">{cardKindLabel(card)}</span><strong>{cardLabel(view, card)}</strong><small>{card.kind === "pause" ? "Reveal after the others" : card.kind === "player" && card.targetPlayerId === view.self.playerId ? "Return played cards to hand" : "Attempt connection"}</small><span className="card-action">{selfSubmitted && ((view.self.initialSelectionCardId ?? view.self.pauseSelectionCardId) === card.id) ? "Locked" : "Select"}</span></button>)}</div> : <EmptyState title="No target cards left" body="Your hand has no valid choice for this phase." />}</section>}
+    <section className="game-heading"><div><div className="eyebrow">ROUND {String(round.number).padStart(2, "0")} // {round.phase.replace("-", " ").toUpperCase()}</div><h1>{phaseTitle}</h1><p>{phaseBody}</p></div><div className="submission-meter" aria-label={meter.label}><strong>{meter.value}</strong><span>{meter.status}</span><div><i style={{ width: `${meter.progress}%` }} /></div></div></section>
+    {mayChoose && <section className="panel hand-panel" aria-labelledby="hand-title"><div className="section-title"><div><div className="eyebrow">PRIVATE // ONLY YOU CAN SEE THIS</div><h2 id="hand-title">Your hand</h2></div>{selfSubmitted && <span className="locked-label">✓ Selection locked</span>}</div>{eligibleCards.length ? <div className="card-grid">{eligibleCards.map((card) => <button className={`game-card ${card.kind} ${selfSubmitted && selectionCardId === card.id ? "selected" : ""}`} key={card.id} disabled={unavailable || selfSubmitted} onClick={() => submit(card)}><span className="card-type">{cardKindLabel(card)}</span><strong>{cardLabel(view, card)}</strong><small>{card.kind === "pause" ? "Reveal after the others" : card.kind === "player" && card.targetPlayerId === view.self.playerId ? "Return played cards to hand" : "Attempt connection"}</small><span className="card-action">{selfSubmitted && selectionCardId === card.id ? "Locked" : "Select"}</span></button>)}</div> : <EmptyState title="No target cards left" body="Your hand has no valid choice for this phase." />}</section>}
     {!mayChoose && round.phase !== "resolved" && <section className="panel waiting-panel"><div className="orbit" aria-hidden="true"><i /></div><h2>{selfSubmitted || !isPausePlayer ? "Choice secured" : "Waiting for your turn"}</h2><p>Waiting for {Math.max(0, expectedCount - submittedCount)} {Math.max(0, expectedCount - submittedCount) === 1 ? "player" : "players"} to submit.</p></section>}
     {round.revealedInitialSelections && <RevealPanel title="Initial reveal" selections={round.revealedInitialSelections} view={view} />}
     {round.revealedPauseSelections && <RevealPanel title="Pause reveal" selections={round.revealedPauseSelections} view={view} />}
@@ -378,19 +410,46 @@ function PlayerStatePanel({ view }: { view: LobbyView }) {
 
 function Rulebook({ onClose }: { onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
+    openerRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     closeRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+        "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      ) ?? []);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (!dialogRef.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (focusable.length === 1 || (event.shiftKey && document.activeElement === first)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      openerRef.current?.focus();
+    };
   }, [onClose]);
-  const areas: Array<{ id: GameFeature["area"]; name: string }> = [
-    { id: "online-play", name: "Online play" },
-    { id: "connection-round", name: "Connection round" },
-    { id: "rewards", name: "Rewards" },
-    { id: "full-game", name: "Full game" },
-  ];
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="rulebook" role="dialog" aria-modal="true" aria-labelledby="rulebook-title"><header><div><div className="eyebrow">LIVE RULEBOOK // FEATURE MANIFEST</div><h1 id="rulebook-title">What you can play</h1><p>This rulebook is generated from the same feature list as the game. Status changes ship with the rules.</p></div><button ref={closeRef} onClick={onClose} aria-label="Close rulebook">×</button></header><div className="legend"><span className="playable">Playable</span><span className="unresolved">Unresolved</span><span className="planned">Planned</span></div>{areas.map((area) => { const features = gameFeatures.filter((feature) => feature.area === area.id); if (!features.length) return null; return <section key={area.id}><h2>{area.name}</h2><div className="feature-list">{features.map((feature) => <article key={feature.id}><span className={feature.status}>{feature.status}</span><div><h3>{feature.name}</h3><p>{feature.rule}</p></div></article>)}</div></section>; })}<div className="scope-warning"><strong>Current playable scope</strong><p>You can complete repeated connection-selection rounds online. Rewards, economy, scoring, board play, and an end-game are not implemented or fully defined yet.</p></div></section></div>;
+  const areas = groupFeaturesByArea();
+  const statuses = [...new Set(gameFeatures.map(({ status }) => status))];
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section ref={dialogRef} className="rulebook" role="dialog" aria-modal="true" aria-labelledby="rulebook-title"><header><div><div className="eyebrow">LIVE RULEBOOK // FEATURE MANIFEST</div><h1 id="rulebook-title">What you can play</h1><p>This rulebook is generated from the same feature list as the game. Status changes ship with the rules.</p></div><button ref={closeRef} onClick={onClose} aria-label="Close rulebook">×</button></header><div className="legend">{statuses.map((status) => <span className={status} key={status}>{status}</span>)}</div>{areas.map((area) => <section key={area.id}><h2>{area.name}</h2><div className="feature-list">{area.features.map((feature) => <article key={feature.id}><span className={feature.status}>{feature.status}</span><div><h3>{feature.name}</h3><p>{feature.rule}</p></div></article>)}</div></section>)}<div className="scope-warning"><strong>Current feature scope</strong><p>{summarizeFeatureScope()}</p></div></section></div>;
 }
 
 function EmptyState({ title, body, action }: { title: string; body: string; action?: ReactNode }) {

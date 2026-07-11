@@ -1,14 +1,8 @@
 export type FeatureStatus = "playable" | "planned" | "unresolved";
 
-export type FeatureArea =
-  | "online-play"
-  | "connection-round"
-  | "rewards"
-  | "full-game";
-
 export interface GameFeature {
   id: string;
-  area: FeatureArea;
+  area: string;
   name: string;
   status: FeatureStatus;
   rule: string;
@@ -109,6 +103,7 @@ export const gameFeatures = [
 ] as const satisfies readonly GameFeature[];
 
 export type GameFeatureId = (typeof gameFeatures)[number]["id"];
+export type FeatureArea = (typeof gameFeatures)[number]["area"];
 
 export const playableFeatureIds = gameFeatures
   .filter((feature) => feature.status === "playable")
@@ -116,4 +111,39 @@ export const playableFeatureIds = gameFeatures
 
 export function getFeature(id: GameFeatureId) {
   return gameFeatures.find((feature) => feature.id === id);
+}
+
+export function groupFeaturesByArea(
+  features: readonly GameFeature[] = gameFeatures,
+): Array<{ id: string; name: string; features: readonly GameFeature[] }> {
+  const groups = new Map<string, GameFeature[]>();
+  for (const feature of features) {
+    const areaFeatures = groups.get(feature.area) ?? [];
+    areaFeatures.push(feature);
+    groups.set(feature.area, areaFeatures);
+  }
+  return [...groups].map(([id, areaFeatures]) => ({
+    id,
+    name: id
+      .split("-")
+      .map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
+      .join(" "),
+    features: areaFeatures,
+  }));
+}
+
+export function summarizeFeatureScope(
+  features: readonly GameFeature[] = gameFeatures,
+): string {
+  const byStatus = new Map<FeatureStatus, string[]>();
+  for (const feature of features) {
+    const names = byStatus.get(feature.status) ?? [];
+    names.push(feature.name);
+    byStatus.set(feature.status, names);
+  }
+  return [...byStatus]
+    .map(([status, names]) =>
+      `${status[0]?.toUpperCase() ?? ""}${status.slice(1)}: ${names.join(", ")}.`
+    )
+    .join(" ");
 }

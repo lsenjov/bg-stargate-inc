@@ -30,6 +30,11 @@ class FakeSocket {
   on(event: string, listener: Listener) { this.add(this.handlers, event, listener); return this; }
   off(event: string, listener: Listener) { this.remove(this.handlers, event, listener); return this; }
   disconnect() { this.connected = false; return this; }
+  connect() {
+    this.connected = true;
+    this.serverEmit("connect");
+    return this;
+  }
   emit(event: string, payload: unknown, callback?: (result: CommandResult<unknown>) => void) {
     this.commands.push({ event, payload });
     const response = this.responses.get(event);
@@ -113,8 +118,8 @@ function gameView(phase: "initial-selection" | "pause-selection" | "resolved" = 
   };
 }
 
-function sessionData(state: LobbyView): SessionData {
-  return { state, reconnectToken: "token" };
+function sessionData(state: LobbyView, reconnectToken = "token"): SessionData {
+  return { state, reconnectToken };
 }
 
 function asSocket(fake: FakeSocket): GameSocket {
@@ -171,6 +176,7 @@ describe("player app", () => {
     render(<App socket={asSocket(socket)} />);
 
     expect(await screen.findByText("Connection report")).toBeTruthy();
+    expect(screen.getByLabelText("Round resolved").textContent).toContain("DONE");
     expect(screen.getByText("Reward step not yet playable")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /next round/i }));
     expect(socket.commands.some(({ event }) => event === "round:next")).toBe(true);
@@ -186,8 +192,75 @@ describe("player app", () => {
     for (const feature of gameFeatures) {
       expect(within(dialog).getByText(feature.name)).toBeTruthy();
     }
-    expect(within(dialog).getByText(/rewards, economy, scoring, board play/i)).toBeTruthy();
+    expect(within(dialog).getByText("Current feature scope")).toBeTruthy();
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("traps rulebook focus and restores the opener after Escape", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeSocket();
+    render(<App socket={asSocket(socket)} />);
+    const opener = screen.getAllByRole("button", { name: "Rulebook" })[0]!;
+
+    await user.click(opener);
+    const close = screen.getByRole("button", { name: "Close rulebook" });
+    expect(document.activeElement).toBe(close);
+    await user.tab();
+    expect(document.activeElement).toBe(close);
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(close);
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("keeps another tab's rotated session and reconnects before returning home", async () => {
+    const previousSession = {
+      lobbyId: "lobby-one",
+      playerId: "p1",
+      reconnectToken: "previous-token",
+    };
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify(previousSession));
+    const socket = new FakeSocket();
+    socket.responses.set(
+      "lobby:reconnect",
+      { ok: true, data: sessionData(waitingView(), "owned-rotated-token") },
+    );
+    render(<App socket={asSocket(socket)} />);
+    await screen.findByText("ABCDEFGHJK");
+
+    const otherTabSession = { ...previousSession, reconnectToken: "other-tab-token" };
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify(otherTabSession));
+    socket.connected = false;
+    socket.serverEmit("disconnect");
+    socket.serverEmit("session:replaced");
+
+    expect(await screen.findByText("Seat moved")).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem("stargate-inc-session-v1") ?? "{}"))
+      .toEqual(otherTabSession);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Return home" }));
+
+    const callsign = (await screen.findAllByLabelText("Your callsign", { selector: "input" }))[0]!;
+    await user.type(callsign, "Altair");
+    expect((screen.getByRole("button", { name: /create lobby/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect(socket.connected).toBe(true);
+  });
+
+  it("shows the pause follow-up rather than the initial pause as selected", async () => {
+    const view = gameView("pause-selection");
+    view.lobby.game!.round.pausePlayerIds = ["p1"];
+    view.lobby.game!.round.pauseSelectionsSubmittedBy = ["p1"];
+    view.self.initialSelectionCardId = "pause:p1";
+    view.self.pauseSelectionCardId = "player:p1:p2";
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
+    render(<App socket={asSocket(socket)} />);
+
+    const vega = await screen.findByRole("button", { name: /Vega.*Locked/i });
+    expect(vega.classList.contains("selected")).toBe(true);
   });
 });
