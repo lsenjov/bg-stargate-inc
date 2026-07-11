@@ -57,6 +57,12 @@ export interface GameServerOptions {
   corsOrigin?: string | string[];
   reconnectTokenGraceMs?: number;
   abandonedLobbyTtlMs?: number;
+  waitingLobbyTtlMs?: number;
+  maxConnectionsPerIp?: number;
+  maxLobbyCreatesPerIp?: number;
+  lobbyCreateWindowMs?: number;
+  maxActiveLobbies?: number;
+  now?: () => number;
 }
 
 export interface GameServer {
@@ -200,8 +206,19 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
   const reconnectTokenGrace = new Map<string, ReconnectTokenGrace>();
   const reconnectTokenGraceTimers = new Map<string, NodeJS.Timeout>();
   const abandonedLobbyTimers = new Map<string, NodeJS.Timeout>();
+  const waitingLobbyTimers = new Map<string, NodeJS.Timeout>();
+  const connectionCountsByIp = new Map<string, number>();
+  const connectionIpsBySocketId = new Map<string, string>();
+  const lobbyCreatesByIp = new Map<string, number[]>();
+  const lobbyCreateCleanupTimersByIp = new Map<string, NodeJS.Timeout>();
   const reconnectTokenGraceMs = options.reconnectTokenGraceMs ?? 5_000;
   const abandonedLobbyTtlMs = options.abandonedLobbyTtlMs ?? 30 * 60_000;
+  const waitingLobbyTtlMs = options.waitingLobbyTtlMs ?? 2 * 60 * 60_000;
+  const maxConnectionsPerIp = options.maxConnectionsPerIp ?? 32;
+  const maxLobbyCreatesPerIp = options.maxLobbyCreatesPerIp ?? 10;
+  const lobbyCreateWindowMs = options.lobbyCreateWindowMs ?? 60_000;
+  const maxActiveLobbies = options.maxActiveLobbies ?? 1_000;
+  const now = options.now ?? Date.now;
 
   const playerKey = (session: Session) =>
     `${session.lobbyId}\u0000${session.playerId}`;
@@ -224,7 +241,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     const grace = {
       previousToken,
       currentToken,
-      expiresAt: Date.now() + reconnectTokenGraceMs,
+      expiresAt: now() + reconnectTokenGraceMs,
     };
     reconnectTokenGrace.set(key, grace);
     const timer = setTimeout(() => {
@@ -237,7 +254,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     reconnectTokenGraceTimers.set(key, timer);
   };
 
-  const consumeReconnectTokenGrace = (
+  const reconnectTokenFromGrace = (
     key: string,
     reconnectToken: string,
   ): string | undefined => {
@@ -245,16 +262,14 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     if (!grace) {
       return undefined;
     }
-    if (grace.expiresAt <= Date.now()) {
+    if (grace.expiresAt <= now()) {
       clearReconnectTokenGrace(key);
       return undefined;
     }
     if (!secureEqual(grace.previousToken, reconnectToken)) {
       return undefined;
     }
-    const currentToken = grace.currentToken;
-    clearReconnectTokenGrace(key);
-    return currentToken;
+    return grace.currentToken;
   };
 
   const cancelAbandonedLobbyCleanup = (lobbyId: string): void => {
@@ -265,6 +280,14 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     }
   };
 
+  const cancelWaitingLobbyExpiry = (lobbyId: string): void => {
+    const timer = waitingLobbyTimers.get(lobbyId);
+    if (timer) {
+      clearTimeout(timer);
+      waitingLobbyTimers.delete(lobbyId);
+    }
+  };
+
   const deleteLobby = (lobby: LobbyState): void => {
     if (lobbies.get(lobby.id) !== lobby) {
       return;
@@ -272,9 +295,76 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     lobbies.delete(lobby.id);
     lobbyIdsByJoinCode.delete(lobby.joinCode);
     cancelAbandonedLobbyCleanup(lobby.id);
+    cancelWaitingLobbyExpiry(lobby.id);
     for (const playerId of Object.keys(lobby.players)) {
-      clearReconnectTokenGrace(playerKey({ lobbyId: lobby.id, playerId }));
+      const key = playerKey({ lobbyId: lobby.id, playerId });
+      clearReconnectTokenGrace(key);
+      const socketId = socketIdsByPlayer.get(key);
+      socketIdsByPlayer.delete(key);
+      if (socketId) {
+        sessionsBySocketId.delete(socketId);
+        io.sockets.sockets.get(socketId)?.disconnect(true);
+      }
     }
+  };
+
+  const scheduleWaitingLobbyExpiry = (lobby: LobbyState): void => {
+    const timer = setTimeout(() => {
+      waitingLobbyTimers.delete(lobby.id);
+      if (lobbies.get(lobby.id) === lobby && lobby.status === "waiting") {
+        deleteLobby(lobby);
+      }
+    }, waitingLobbyTtlMs);
+    timer.unref();
+    waitingLobbyTimers.set(lobby.id, timer);
+  };
+
+  const requireLobbyCreateCapacity = (ip: string): number[] => {
+    if (lobbies.size >= maxActiveLobbies) {
+      throw new CommandFailure(
+        "server-capacity",
+        "The server cannot create another lobby right now",
+      );
+    }
+    const cutoff = now() - lobbyCreateWindowMs;
+    const recentCreates = (lobbyCreatesByIp.get(ip) ?? []).filter(
+      (createdAt) => createdAt > cutoff,
+    );
+    if (recentCreates.length >= maxLobbyCreatesPerIp) {
+      lobbyCreatesByIp.set(ip, recentCreates);
+      throw new CommandFailure(
+        "rate-limited",
+        "Too many lobbies have been created from this address",
+      );
+    }
+    return recentCreates;
+  };
+
+  const scheduleLobbyCreateRateCleanup = (ip: string): void => {
+    const existingTimer = lobbyCreateCleanupTimersByIp.get(ip);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const createdAt = lobbyCreatesByIp.get(ip)?.[0];
+    if (createdAt === undefined) {
+      lobbyCreateCleanupTimersByIp.delete(ip);
+      return;
+    }
+    const timer = setTimeout(() => {
+      lobbyCreateCleanupTimersByIp.delete(ip);
+      const cutoff = now() - lobbyCreateWindowMs;
+      const recentCreates = (lobbyCreatesByIp.get(ip) ?? []).filter(
+        (timestamp) => timestamp > cutoff,
+      );
+      if (recentCreates.length === 0) {
+        lobbyCreatesByIp.delete(ip);
+        return;
+      }
+      lobbyCreatesByIp.set(ip, recentCreates);
+      scheduleLobbyCreateRateCleanup(ip);
+    }, Math.max(1, createdAt + lobbyCreateWindowMs - now() + 1));
+    timer.unref();
+    lobbyCreateCleanupTimersByIp.set(ip, timer);
   };
 
   const scheduleAbandonedLobbyCleanup = (lobby: LobbyState): void => {
@@ -358,6 +448,18 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     setConnected(lobby, playerId, true);
   };
 
+  io.use((socket, next) => {
+    const ip = socket.handshake.address;
+    const connectionCount = connectionCountsByIp.get(ip) ?? 0;
+    if (connectionCount >= maxConnectionsPerIp) {
+      next(new Error("Too many connections from this address"));
+      return;
+    }
+    connectionCountsByIp.set(ip, connectionCount + 1);
+    connectionIpsBySocketId.set(socket.id, ip);
+    next();
+  });
+
   io.on("connection", (socket) => {
     socket.on("lobby:create", (input, callback) => {
       runCommand(callback, () => {
@@ -366,6 +468,8 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
         if (!parsed.success) {
           throw new CommandFailure("invalid-input", "Invalid lobby creation payload");
         }
+        const ip = connectionIpsBySocketId.get(socket.id) ?? socket.handshake.address;
+        const recentCreates = requireLobbyCreateCapacity(ip);
 
         let joinCode = randomJoinCode();
         while (lobbyIdsByJoinCode.has(joinCode)) {
@@ -391,6 +495,9 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
         };
         lobbies.set(lobbyId, lobby);
         lobbyIdsByJoinCode.set(joinCode, lobbyId);
+        lobbyCreatesByIp.set(ip, [...recentCreates, now()]);
+        scheduleLobbyCreateRateCleanup(ip);
+        scheduleWaitingLobbyExpiry(lobby);
         attachSession(socket, lobby, playerId);
         emitLobby(lobby);
         return { state: lobbyView(lobby, playerId), reconnectToken };
@@ -464,7 +571,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
             "This connection already belongs to a player",
           );
         }
-        const retriedToken = consumeReconnectTokenGrace(
+        const retriedToken = reconnectTokenFromGrace(
           key,
           parsed.data.reconnectToken,
         );
@@ -493,6 +600,12 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
 
         const oldSocketId = socketIdsByPlayer.get(playerKey(session));
         const oldSocket = oldSocketId ? io.sockets.sockets.get(oldSocketId) : undefined;
+        if (retriedToken && (oldSocket || player.connected)) {
+          throw new CommandFailure(
+            "invalid-credentials",
+            "Reconnect credentials are invalid",
+          );
+        }
         if (usesCurrentToken) {
           const previousToken = player.reconnectToken;
           player.reconnectToken = randomReconnectToken();
@@ -554,6 +667,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
           lobby.game.players[player.id]!.connected = player.connected;
         }
         lobby.status = "playing";
+        cancelWaitingLobbyExpiry(lobby.id);
         emitLobby(lobby);
         return lobbyView(lobby, session.playerId);
       });
@@ -619,6 +733,16 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     });
 
     socket.on("disconnect", () => {
+      const ip = connectionIpsBySocketId.get(socket.id);
+      connectionIpsBySocketId.delete(socket.id);
+      if (ip) {
+        const connectionCount = connectionCountsByIp.get(ip) ?? 0;
+        if (connectionCount <= 1) {
+          connectionCountsByIp.delete(ip);
+        } else {
+          connectionCountsByIp.set(ip, connectionCount - 1);
+        }
+      }
       const session = sessionsBySocketId.get(socket.id);
       sessionsBySocketId.delete(socket.id);
       if (!session || socketIdsByPlayer.get(playerKey(session)) !== socket.id) {

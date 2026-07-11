@@ -57,6 +57,8 @@ export type CommandErrorCode =
   | "not-authenticated"
   | "lobby-not-found"
   | "lobby-full"
+  | "rate-limited"
+  | "server-capacity"
   | "game-already-started"
   | "invalid-credentials"
   | "host-only"

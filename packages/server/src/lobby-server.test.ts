@@ -496,8 +496,25 @@ describe("connection recovery", () => {
     expect((await reconnectedState).lobby.players[secondId]?.connected).toBe(true);
 
     const replaySocket = await connectClient();
-    const retry = expectSuccess(
+    expectFailure(
       await reconnectLobby(replaySocket, {
+        lobbyId: second.state.lobby.id,
+        playerId: secondId,
+        reconnectToken: second.reconnectToken,
+      }),
+      "invalid-credentials",
+    );
+
+    const redisconnectedState = nextState(
+      host.socket,
+      (state) => state.lobby.players[secondId]?.connected === false,
+    );
+    replacement.disconnect();
+    await redisconnectedState;
+
+    const retrySocket = await connectClient();
+    const retry = expectSuccess(
+      await reconnectLobby(retrySocket, {
         lobbyId: second.state.lobby.id,
         playerId: secondId,
         reconnectToken: second.reconnectToken,
@@ -505,9 +522,9 @@ describe("connection recovery", () => {
     );
     expect(retry.reconnectToken).toBe(recovered.reconnectToken);
 
-    const consumedReplaySocket = await connectClient();
+    const secondReplaySocket = await connectClient();
     expectFailure(
-      await reconnectLobby(consumedReplaySocket, {
+      await reconnectLobby(secondReplaySocket, {
         lobbyId: second.state.lobby.id,
         playerId: secondId,
         reconnectToken: second.reconnectToken,
@@ -621,6 +638,63 @@ describe("connection recovery", () => {
     host.socket.disconnect();
     await new Promise<void>((resolve) => setTimeout(resolve, 60));
 
+    const joinSocket = await connectClient();
+    expectFailure(await joinLobby(joinSocket, joinCode, "Late"), "lobby-not-found");
+    const reconnectSocket = await connectClient();
+    expectFailure(
+      await reconnectLobby(reconnectSocket, credentials),
+      "invalid-credentials",
+    );
+  });
+
+  it("caps concurrent connections per IP and releases capacity on disconnect", async () => {
+    await restartServer({ maxConnectionsPerIp: 2 });
+    const first = await connectClient();
+    await connectClient();
+
+    await expect(connectClient()).rejects.toThrow(
+      "Too many connections from this address",
+    );
+
+    first.disconnect();
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await expect(connectClient()).resolves.toBeDefined();
+  });
+
+  it("rate-limits lobby creation per IP with a deterministic window", async () => {
+    let currentTime = 1_000;
+    await restartServer({
+      maxLobbyCreatesPerIp: 2,
+      lobbyCreateWindowMs: 100,
+      now: () => currentTime,
+    });
+    await createPlayer("First");
+    await createPlayer("Second");
+    const limited = await connectClient();
+
+    expectFailure(await createLobby(limited, "Limited"), "rate-limited");
+
+    currentTime += 101;
+    expectSuccess(await createLobby(limited, "Allowed"));
+  });
+
+  it("expires connected waiting lobbies and releases global lobby capacity", async () => {
+    await restartServer({ maxActiveLobbies: 1, waitingLobbyTtlMs: 25 });
+    const host = await createPlayer("Host");
+    const credentials = {
+      lobbyId: host.state.lobby.id,
+      playerId: host.state.self.playerId,
+      reconnectToken: host.reconnectToken,
+    };
+    const joinCode = host.state.lobby.joinCode;
+    const blocked = await connectClient();
+
+    expectFailure(await createLobby(blocked, "Blocked"), "server-capacity");
+    await new Promise<void>((resolve) =>
+      host.socket.once("disconnect", () => resolve()),
+    );
+
+    expectSuccess(await createLobby(blocked, "Replacement"));
     const joinSocket = await connectClient();
     expectFailure(await joinLobby(joinSocket, joinCode, "Late"), "lobby-not-found");
     const reconnectSocket = await connectClient();
