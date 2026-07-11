@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,7 @@ class FakeSocket {
   managerHandlers = new Map<string, Set<Listener>>();
   commands: Array<{ event: string; payload: unknown }> = [];
   responses = new Map<string, CommandResult<unknown>>();
+  callbacks = new Map<string, (result: CommandResult<unknown>) => void>();
   io = {
     on: (event: string, listener: Listener) => this.add(this.managerHandlers, event, listener),
     off: (event: string, listener: Listener) => this.remove(this.managerHandlers, event, listener),
@@ -37,6 +38,7 @@ class FakeSocket {
   }
   emit(event: string, payload: unknown, callback?: (result: CommandResult<unknown>) => void) {
     this.commands.push({ event, payload });
+    if (callback) this.callbacks.set(event, callback);
     const response = this.responses.get(event);
     if (response && callback) callback(response);
     return this;
@@ -247,6 +249,39 @@ describe("player app", () => {
     await user.type(callsign, "Altair");
     expect((screen.getByRole("button", { name: /create lobby/i }) as HTMLButtonElement).disabled).toBe(false);
     expect(socket.connected).toBe(true);
+  });
+
+  it("keeps a newer shared session when a stale reconnect fails", async () => {
+    const staleSession = {
+      lobbyId: "stale-lobby",
+      playerId: "stale-player",
+      reconnectToken: "stale-token",
+    };
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify(staleSession));
+    const socket = new FakeSocket();
+    render(<App socket={asSocket(socket)} />);
+    expect(socket.commands).toContainEqual({
+      event: "lobby:reconnect",
+      payload: staleSession,
+    });
+
+    const newerSession = {
+      lobbyId: "new-lobby",
+      playerId: "new-player",
+      reconnectToken: "new-token",
+    };
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify(newerSession));
+    act(() => {
+      socket.callbacks.get("lobby:reconnect")?.({
+        ok: false,
+        error: { code: "invalid-credentials", message: "Reconnect credentials are invalid" },
+      });
+    });
+
+    expect(JSON.parse(localStorage.getItem("stargate-inc-session-v1") ?? "{}"))
+      .toEqual(newerSession);
+    expect(screen.getByText(/saved game is no longer available/i)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /build the connection/i })).toBeTruthy();
   });
 
   it("shows the pause follow-up rather than the initial pause as selected", async () => {

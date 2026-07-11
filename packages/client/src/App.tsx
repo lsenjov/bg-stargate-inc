@@ -158,7 +158,7 @@ export function App({ socket: suppliedSocket }: AppProps) {
         } else {
           setConnection("online");
           if (result.error.code === "invalid-credentials" || result.error.code === "lobby-not-found") {
-            clearSession();
+            clearSession(currentSession);
             sessionRef.current = null;
             setSavedSession(null);
             setView(null);
