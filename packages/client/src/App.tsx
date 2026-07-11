@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -33,6 +32,12 @@ interface SavedSession {
 type ConnectionState = "connecting" | "online" | "offline" | "reconnecting";
 
 const sessionKey = "stargate-inc-session-v1";
+let defaultSocket: GameSocket | undefined;
+
+function getDefaultSocket(): GameSocket {
+  defaultSocket ??= createGameSocket();
+  return defaultSocket;
+}
 
 function loadSession(): SavedSession | null {
   try {
@@ -119,7 +124,7 @@ export interface AppProps {
 }
 
 export function App({ socket: suppliedSocket }: AppProps) {
-  const socket = useMemo(() => suppliedSocket ?? createGameSocket(), [suppliedSocket]);
+  const socket = suppliedSocket ?? getDefaultSocket();
   const [view, setView] = useState<LobbyView | null>(null);
   const [savedSession, setSavedSession] = useState<SavedSession | null>(() => loadSession());
   const sessionRef = useRef(savedSession);
@@ -193,7 +198,11 @@ export function App({ socket: suppliedSocket }: AppProps) {
     socket.on("session:replaced", onReplaced);
     socket.on("connect_error", onConnectError);
     socket.io.on("reconnect_attempt", onReconnectAttempt);
-    if (socket.connected) reconnect();
+    if (socket.connected) {
+      reconnect();
+    } else {
+      socket.connect();
+    }
 
     return () => {
       socket.off("connect", reconnect);

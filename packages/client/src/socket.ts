@@ -21,7 +21,7 @@ export function createGameSocket(
     }
   ).env?.VITE_SOCKET_URL;
   return io(configuredUrl || undefined, {
-    autoConnect: true,
+    autoConnect: false,
     reconnection: true,
     reconnectionDelay: 500,
     reconnectionDelayMax: 5_000,
