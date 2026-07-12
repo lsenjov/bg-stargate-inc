@@ -10,11 +10,12 @@ import {
   type GestureEvent,
   type LobbyView,
   type SelectionCommand,
+  type SelectionUndoCommand,
   type ServerToClientEvents,
   type SessionData,
 } from "@stargate-inc/shared";
 import { io as createClient, type Socket as ClientSocket } from "socket.io-client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createGameServer,
@@ -109,6 +110,13 @@ function selectionCommand(
   return new Promise((resolve) => socket.emit(event, command, resolve));
 }
 
+function undoSelection(
+  socket: TestSocket,
+  command: SelectionUndoCommand = {},
+): Promise<CommandResult<LobbyView>> {
+  return new Promise((resolve) => socket.emit("selection:undo", command, resolve));
+}
+
 function gestureCommand(
   socket: TestSocket,
   command: GestureCommand,
@@ -164,6 +172,10 @@ function nextGesture(socket: TestSocket): Promise<GestureEvent> {
   });
 }
 
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 async function createPlayer(name: string): Promise<PlayerSession> {
   const socket = await connectClient();
   return { socket, ...expectSuccess(await createLobby(socket, name)) };
@@ -194,6 +206,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const socket of sockets) {
     socket.disconnect();
   }
@@ -465,6 +478,355 @@ describe("secret game flow", () => {
     expect(resolved.lobby.game?.round.revealedPauseSelections?.[hostId]?.id).toBe(
       hostFollowup,
     );
+  });
+});
+
+describe("selection undo and deadlines", () => {
+  it("undoes and reselects initial choices without resetting the deadline or revealing them", async () => {
+    let currentTime = 5_000;
+    await restartServer({
+      selectionDurationMs: 1_000,
+      now: () => currentTime,
+    });
+    const anonymous = await connectClient();
+    expectFailure(await undoSelection(anonymous), "not-authenticated");
+
+    const [host, second, third] = await createThreePlayerLobby();
+    expectFailure(await undoSelection(host.socket), "game-not-started");
+    const malformed = await new Promise<CommandResult<LobbyView>>((resolve) =>
+      host.socket.emit("selection:undo", { unexpected: true } as never, resolve),
+    );
+    expectFailure(malformed, "invalid-input");
+
+    const started = expectSuccess(await emptyCommand(host.socket, "game:start"));
+    expect(started.selectionDeadlineAt).toBe(6_000);
+    expectFailure(await undoSelection(host.socket), "selection-not-submitted");
+
+    const hostId = host.state.self.playerId;
+    const hostChoice = playerCardId(hostId, second.state.self.playerId);
+    const secondUpdate = nextState(
+      second.socket,
+      (state) =>
+        state.lobby.game?.round.initialSelectionsSubmittedBy.includes(hostId) ??
+        false,
+    );
+    const submitted = expectSuccess(
+      await selectionCommand(host.socket, "selection:initial", {
+        cardId: hostChoice,
+      }),
+    );
+    expect(submitted.selectionDeadlineAt).toBe(6_000);
+    expect(JSON.stringify(await secondUpdate)).not.toContain(hostChoice);
+
+    currentTime = 5_400;
+    const undone = expectSuccess(await undoSelection(host.socket));
+    expect(undone.self.initialSelectionCardId).toBeNull();
+    expect(undone.selectionDeadlineAt).toBe(6_000);
+
+    const replacement = await connectClient();
+    const reconnected = expectSuccess(
+      await reconnectLobby(replacement, {
+        lobbyId: host.state.lobby.id,
+        playerId: hostId,
+        reconnectToken: host.reconnectToken,
+      }),
+    );
+    expect(reconnected.state.selectionDeadlineAt).toBe(6_000);
+
+    const reselected = expectSuccess(
+      await selectionCommand(replacement, "selection:initial", {
+        cardId: playerCardId(hostId, third.state.self.playerId),
+      }),
+    );
+    expect(reselected.selectionDeadlineAt).toBe(6_000);
+    expectSuccess(
+      await selectionCommand(second.socket, "selection:initial", {
+        cardId: playerCardId(
+          second.state.self.playerId,
+          second.state.self.playerId,
+        ),
+      }),
+    );
+    const resolved = expectSuccess(
+      await selectionCommand(third.socket, "selection:initial", {
+        cardId: playerCardId(
+          third.state.self.playerId,
+          third.state.self.playerId,
+        ),
+      }),
+    );
+    expect(resolved.lobby.game?.round.phase).toBe("resolved");
+    expect(resolved.selectionDeadlineAt).toBeNull();
+  });
+
+  it("undoes and reselects pause choices and rejects ineligible or closed undo", async () => {
+    let currentTime = 10_000;
+    await restartServer({
+      selectionDurationMs: 1_000,
+      now: () => currentTime,
+    });
+    const [host, second, third] = await createThreePlayerLobby();
+    const initial = expectSuccess(await emptyCommand(host.socket, "game:start"));
+    const hostId = host.state.self.playerId;
+    const secondId = second.state.self.playerId;
+    const thirdId = third.state.self.playerId;
+
+    expectSuccess(
+      await selectionCommand(host.socket, "selection:initial", {
+        cardId: pauseCardId(hostId),
+      }),
+    );
+    expectSuccess(
+      await selectionCommand(second.socket, "selection:initial", {
+        cardId: pauseCardId(secondId),
+      }),
+    );
+    currentTime = 10_200;
+    const pause = expectSuccess(
+      await selectionCommand(third.socket, "selection:initial", {
+        cardId: playerCardId(thirdId, thirdId),
+      }),
+    );
+    expect(initial.selectionDeadlineAt).toBe(11_000);
+    expect(pause.selectionDeadlineAt).toBe(11_200);
+    expectFailure(await undoSelection(third.socket), "player-did-not-pause");
+
+    const firstFollowup = playerCardId(hostId, secondId);
+    const submitted = expectSuccess(
+      await selectionCommand(host.socket, "selection:pause", {
+        cardId: firstFollowup,
+      }),
+    );
+    expect(submitted.selectionDeadlineAt).toBe(11_200);
+    currentTime = 10_500;
+    const undone = expectSuccess(await undoSelection(host.socket));
+    expect(undone.self.pauseSelectionCardId).toBeNull();
+    expect(undone.selectionDeadlineAt).toBe(11_200);
+
+    const replacementFollowup = playerCardId(hostId, hostId);
+    const reselected = expectSuccess(
+      await selectionCommand(host.socket, "selection:pause", {
+        cardId: replacementFollowup,
+      }),
+    );
+    expect(reselected.selectionDeadlineAt).toBe(11_200);
+    const resolved = expectSuccess(
+      await selectionCommand(second.socket, "selection:pause", {
+        cardId: playerCardId(secondId, secondId),
+      }),
+    );
+    expect(resolved.lobby.game?.round.phase).toBe("resolved");
+    expect(resolved.selectionDeadlineAt).toBeNull();
+    expectFailure(await undoSelection(host.socket), "wrong-phase");
+  });
+
+  it("uses a 30-second default and starts a new deadline for the next round", async () => {
+    const [host, second, third] = await createThreePlayerLobby();
+    const beforeStart = Date.now();
+    const started = expectSuccess(await emptyCommand(host.socket, "game:start"));
+    expect(started.selectionDeadlineAt).toBeGreaterThanOrEqual(
+      beforeStart + 30_000,
+    );
+    expect(started.selectionDeadlineAt).toBeLessThanOrEqual(Date.now() + 30_000);
+
+    for (const player of [host, second]) {
+      const playerId = player.state.self.playerId;
+      expectSuccess(
+        await selectionCommand(player.socket, "selection:initial", {
+          cardId: playerCardId(playerId, playerId),
+        }),
+      );
+    }
+    const thirdId = third.state.self.playerId;
+    expectSuccess(
+      await selectionCommand(third.socket, "selection:initial", {
+        cardId: playerCardId(thirdId, thirdId),
+      }),
+    );
+    await delay(2);
+    const nextRound = expectSuccess(await emptyCommand(host.socket, "round:next"));
+    expect(nextRound.lobby.game?.round.number).toBe(2);
+    expect(nextRound.selectionDeadlineAt).not.toBeNull();
+    expect(nextRound.selectionDeadlineAt).not.toBe(started.selectionDeadlineAt);
+  });
+
+  it("auto-selects self for missing and disconnected players while preserving manual secrecy", async () => {
+    await restartServer({ selectionDurationMs: 80 });
+    const [host, second, third] = await createThreePlayerLobby();
+    expectSuccess(await emptyCommand(host.socket, "game:start"));
+    const hostId = host.state.self.playerId;
+    const secondId = second.state.self.playerId;
+    const thirdId = third.state.self.playerId;
+    const manualChoice = playerCardId(hostId, secondId);
+    const hiddenUpdate = nextState(
+      third.socket,
+      (state) =>
+        state.lobby.game?.round.initialSelectionsSubmittedBy.includes(hostId) ??
+        false,
+    );
+    expectSuccess(
+      await selectionCommand(host.socket, "selection:initial", {
+        cardId: manualChoice,
+      }),
+    );
+    expect(JSON.stringify(await hiddenUpdate)).not.toContain(manualChoice);
+
+    const disconnected = nextState(
+      host.socket,
+      (state) => state.lobby.players[secondId]?.connected === false,
+    );
+    second.socket.disconnect();
+    await disconnected;
+    const automatic = await nextState(
+      host.socket,
+      (state) => state.lobby.game?.round.phase === "resolved",
+    );
+    expect(automatic.selectionDeadlineAt).toBeNull();
+    expect(automatic.lobby.game?.round.revealedInitialSelections).toMatchObject({
+      [hostId]: { id: manualChoice },
+      [secondId]: { id: playerCardId(secondId, secondId) },
+      [thirdId]: { id: playerCardId(thirdId, thirdId) },
+    });
+  });
+
+  it("resolves all automatic initial picks as self-connections", async () => {
+    await restartServer({ selectionDurationMs: 30 });
+    const [host, second, third] = await createThreePlayerLobby();
+    const started = expectSuccess(await emptyCommand(host.socket, "game:start"));
+    const resolved = await nextState(
+      host.socket,
+      (state) => state.lobby.game?.round.phase === "resolved",
+    );
+    for (const player of [host, second, third]) {
+      const playerId = player.state.self.playerId;
+      expect(resolved.lobby.game?.round.revealedInitialSelections?.[playerId]?.id)
+        .toBe(playerCardId(playerId, playerId));
+      expect(resolved.lobby.game?.round.resolution?.connections).toContainEqual({
+        kind: "self",
+        playerId,
+        step: "initial",
+      });
+    }
+    expect(started.selectionDeadlineAt).not.toBeNull();
+    expect(resolved.selectionDeadlineAt).toBeNull();
+  });
+
+  it("auto-selects self during pause using a fresh deadline", async () => {
+    await restartServer({ selectionDurationMs: 80 });
+    const [host, second, third] = await createThreePlayerLobby();
+    const initial = expectSuccess(await emptyCommand(host.socket, "game:start"));
+    const hostId = host.state.self.playerId;
+    const secondId = second.state.self.playerId;
+    const thirdId = third.state.self.playerId;
+    expectSuccess(
+      await selectionCommand(host.socket, "selection:initial", {
+        cardId: pauseCardId(hostId),
+      }),
+    );
+    expectSuccess(
+      await selectionCommand(second.socket, "selection:initial", {
+        cardId: playerCardId(secondId, secondId),
+      }),
+    );
+    await delay(5);
+    const pause = expectSuccess(
+      await selectionCommand(third.socket, "selection:initial", {
+        cardId: playerCardId(thirdId, thirdId),
+      }),
+    );
+    expect(pause.lobby.game?.round.phase).toBe("pause-selection");
+    expect(pause.selectionDeadlineAt).toBeGreaterThan(initial.selectionDeadlineAt!);
+
+    const resolved = await nextState(
+      host.socket,
+      (state) => state.lobby.game?.round.phase === "resolved",
+    );
+    expect(resolved.lobby.game?.round.revealedPauseSelections?.[hostId]?.id).toBe(
+      playerCardId(hostId, hostId),
+    );
+    expect(resolved.lobby.game?.round.resolution?.connections).toContainEqual({
+      kind: "self",
+      playerId: hostId,
+      step: "pause",
+    });
+    expect(resolved.selectionDeadlineAt).toBeNull();
+  });
+
+  it("does not let a replaced initial timer expire a later pause phase", async () => {
+    await restartServer({ selectionDurationMs: 300 });
+    const [host, second, third] = await createThreePlayerLobby();
+    const initial = expectSuccess(await emptyCommand(host.socket, "game:start"));
+    const hostId = host.state.self.playerId;
+    const secondId = second.state.self.playerId;
+    const thirdId = third.state.self.playerId;
+    expectSuccess(
+      await selectionCommand(host.socket, "selection:initial", {
+        cardId: pauseCardId(hostId),
+      }),
+    );
+    expectSuccess(
+      await selectionCommand(second.socket, "selection:initial", {
+        cardId: playerCardId(secondId, secondId),
+      }),
+    );
+    await delay(120);
+    const pause = expectSuccess(
+      await selectionCommand(third.socket, "selection:initial", {
+        cardId: playerCardId(thirdId, thirdId),
+      }),
+    );
+    expect(pause.selectionDeadlineAt).toBeGreaterThan(initial.selectionDeadlineAt!);
+
+    await delay(Math.max(0, initial.selectionDeadlineAt! - Date.now() + 30));
+    const replacement = await connectClient();
+    const recovered = expectSuccess(
+      await reconnectLobby(replacement, {
+        lobbyId: host.state.lobby.id,
+        playerId: hostId,
+        reconnectToken: host.reconnectToken,
+      }),
+    );
+    expect(recovered.state.lobby.game?.round.phase).toBe("pause-selection");
+    expect(recovered.state.selectionDeadlineAt).toBe(pause.selectionDeadlineAt);
+    const resolved = await nextState(
+      replacement,
+      (state) => state.lobby.game?.round.phase === "resolved",
+    );
+    expect(resolved.lobby.game?.round.revealedPauseSelections?.[hostId]?.id).toBe(
+      playerCardId(hostId, hostId),
+    );
+  });
+
+  it("clears selection timers when an abandoned lobby is deleted", async () => {
+    await restartServer({
+      abandonedLobbyTtlMs: 20,
+      maxActiveLobbies: 1,
+      selectionDurationMs: 80,
+    });
+    const [host, second, third] = await createThreePlayerLobby();
+    const credentials = {
+      lobbyId: host.state.lobby.id,
+      playerId: host.state.self.playerId,
+      reconnectToken: host.reconnectToken,
+    };
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    expectSuccess(await emptyCommand(host.socket, "game:start"));
+    const selectionTimerIndex = setTimeoutSpy.mock.calls.findIndex(
+      ([, delayMs]) => delayMs === 80,
+    );
+    const selectionTimer = setTimeoutSpy.mock.results[selectionTimerIndex]?.value;
+    expect(selectionTimer).toBeDefined();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    host.socket.disconnect();
+    second.socket.disconnect();
+    third.socket.disconnect();
+    await delay(120);
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(selectionTimer);
+
+    const replacement = await connectClient();
+    expectSuccess(await createLobby(replacement, "Replacement"));
+    const reconnect = await connectClient();
+    expectFailure(await reconnectLobby(reconnect, credentials), "invalid-credentials");
   });
 });
 

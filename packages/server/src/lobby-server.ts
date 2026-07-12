@@ -8,12 +8,16 @@ import {
   emptyCommandSchema,
   gestureCommandSchema,
   joinLobbySchema,
+  playerCardId,
   reconnectLobbySchema,
   selectionCommandSchema,
+  selectionUndoCommandSchema,
   startNextRound,
   submitInitialSelection,
   submitPauseSelection,
   toPublicGameState,
+  undoInitialSelection,
+  undoPauseSelection,
   type ClientToServerEvents,
   type CommandCallback,
   type CommandErrorCode,
@@ -57,6 +61,14 @@ interface ReconnectTokenGrace {
   expiresAt: number;
 }
 
+interface SelectionDeadline {
+  gameId: string;
+  roundNumber: number;
+  phase: "initial-selection" | "pause-selection";
+  deadlineAt: number;
+  timer: NodeJS.Timeout;
+}
+
 export interface GameServerOptions {
   corsOrigin?: string | string[];
   clientDistPath?: string;
@@ -68,6 +80,7 @@ export interface GameServerOptions {
   lobbyCreateWindowMs?: number;
   maxActiveLobbies?: number;
   gestureCooldownMs?: number;
+  selectionDurationMs?: number;
   now?: () => number;
 }
 
@@ -151,7 +164,11 @@ function publicLobby(lobby: LobbyState): PublicLobbyState {
   };
 }
 
-function lobbyView(lobby: LobbyState, playerId: PlayerId): LobbyView {
+function lobbyView(
+  lobby: LobbyState,
+  playerId: PlayerId,
+  selectionDeadlineAt: number | null,
+): LobbyView {
   const gamePlayer = lobby.game?.players[playerId];
   return {
     lobby: publicLobby(lobby),
@@ -163,7 +180,7 @@ function lobbyView(lobby: LobbyState, playerId: PlayerId): LobbyView {
       pauseSelectionCardId:
         lobby.game?.round.pauseSelections[playerId]?.id ?? null,
     },
-    selectionDeadlineAt: null,
+    selectionDeadlineAt,
   };
 }
 
@@ -211,6 +228,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
   const reconnectTokenGraceTimers = new Map<string, NodeJS.Timeout>();
   const abandonedLobbyTimers = new Map<string, NodeJS.Timeout>();
   const waitingLobbyTimers = new Map<string, NodeJS.Timeout>();
+  const selectionDeadlines = new Map<string, SelectionDeadline>();
   const connectionCountsByIp = new Map<string, number>();
   const connectionIpsBySocketId = new Map<string, string>();
   const lobbyCreatesByIp = new Map<string, number[]>();
@@ -224,6 +242,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
   const lobbyCreateWindowMs = options.lobbyCreateWindowMs ?? 60_000;
   const maxActiveLobbies = options.maxActiveLobbies ?? 1_000;
   const gestureCooldownMs = options.gestureCooldownMs ?? 2_000;
+  const selectionDurationMs = options.selectionDurationMs ?? 30_000;
   const now = options.now ?? Date.now;
 
   const playerKey = (session: Session) =>
@@ -294,6 +313,14 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     }
   };
 
+  const clearSelectionDeadline = (lobbyId: string): void => {
+    const deadline = selectionDeadlines.get(lobbyId);
+    if (deadline) {
+      clearTimeout(deadline.timer);
+      selectionDeadlines.delete(lobbyId);
+    }
+  };
+
   const deleteLobby = (lobby: LobbyState): void => {
     if (lobbies.get(lobby.id) !== lobby) {
       return;
@@ -302,6 +329,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     lobbyIdsByJoinCode.delete(lobby.joinCode);
     cancelAbandonedLobbyCleanup(lobby.id);
     cancelWaitingLobbyExpiry(lobby.id);
+    clearSelectionDeadline(lobby.id);
     for (const playerId of Object.keys(lobby.players)) {
       const key = playerKey({ lobbyId: lobby.id, playerId });
       clearReconnectTokenGrace(key);
@@ -433,13 +461,110 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     }
   };
 
+  const viewLobby = (lobby: LobbyState, playerId: PlayerId): LobbyView =>
+    lobbyView(
+      lobby,
+      playerId,
+      selectionDeadlines.get(lobby.id)?.deadlineAt ?? null,
+    );
+
   const emitLobby = (lobby: LobbyState): void => {
     for (const playerId of Object.keys(lobby.players)) {
       const socketId = socketIdsByPlayer.get(
         playerKey({ lobbyId: lobby.id, playerId }),
       );
       const recipient = socketId ? io.sockets.sockets.get(socketId) : undefined;
-      recipient?.emit("lobby:state", lobbyView(lobby, playerId));
+      recipient?.emit("lobby:state", viewLobby(lobby, playerId));
+    }
+  };
+
+  const scheduleSelectionDeadline = (lobby: LobbyState): void => {
+    const game = lobby.game;
+    if (
+      !game ||
+      (game.round.phase !== "initial-selection" &&
+        game.round.phase !== "pause-selection")
+    ) {
+      clearSelectionDeadline(lobby.id);
+      return;
+    }
+
+    clearSelectionDeadline(lobby.id);
+    const deadline: SelectionDeadline = {
+      gameId: game.id,
+      roundNumber: game.round.number,
+      phase: game.round.phase,
+      deadlineAt: now() + selectionDurationMs,
+      timer: setTimeout(() => {
+        if (selectionDeadlines.get(lobby.id) !== deadline) {
+          return;
+        }
+        const currentLobby = lobbies.get(lobby.id);
+        const currentGame = currentLobby?.game;
+        if (
+          currentLobby !== lobby ||
+          !currentGame ||
+          currentGame.id !== deadline.gameId ||
+          currentGame.round.number !== deadline.roundNumber ||
+          currentGame.round.phase !== deadline.phase
+        ) {
+          selectionDeadlines.delete(lobby.id);
+          return;
+        }
+
+        selectionDeadlines.delete(lobby.id);
+        if (deadline.phase === "initial-selection") {
+          const missingPlayerIds = currentGame.playerOrder.filter(
+            (playerId) =>
+              !Object.hasOwn(currentGame.round.initialSelections, playerId),
+          );
+          for (const playerId of missingPlayerIds) {
+            lobby.game = submitInitialSelection(
+              lobby.game!,
+              playerId,
+              playerCardId(playerId, playerId),
+            );
+          }
+        } else {
+          const missingPlayerIds = currentGame.round.pausePlayerIds.filter(
+            (playerId) =>
+              !Object.hasOwn(currentGame.round.pauseSelections, playerId),
+          );
+          for (const playerId of missingPlayerIds) {
+            lobby.game = submitPauseSelection(
+              lobby.game!,
+              playerId,
+              playerCardId(playerId, playerId),
+            );
+          }
+        }
+
+        scheduleSelectionDeadline(lobby);
+        emitLobby(lobby);
+      }, selectionDurationMs),
+    };
+    deadline.timer.unref();
+    selectionDeadlines.set(lobby.id, deadline);
+  };
+
+  const syncSelectionDeadline = (lobby: LobbyState): void => {
+    const game = lobby.game;
+    if (
+      !game ||
+      (game.round.phase !== "initial-selection" &&
+        game.round.phase !== "pause-selection")
+    ) {
+      clearSelectionDeadline(lobby.id);
+      return;
+    }
+    const deadline = selectionDeadlines.get(lobby.id);
+    if (
+      !deadline ||
+      deadline.gameId !== game.id ||
+      deadline.roundNumber !== game.round.number ||
+      deadline.phase !== game.round.phase
+    ) {
+      scheduleSelectionDeadline(lobby);
     }
   };
 
@@ -517,7 +642,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
         scheduleWaitingLobbyExpiry(lobby);
         attachSession(socket, lobby, playerId);
         emitLobby(lobby);
-        return { state: lobbyView(lobby, playerId), reconnectToken };
+        return { state: viewLobby(lobby, playerId), reconnectToken };
       });
     });
 
@@ -553,7 +678,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
         });
         attachSession(socket, lobby, playerId);
         emitLobby(lobby);
-        return { state: lobbyView(lobby, playerId), reconnectToken };
+        return { state: viewLobby(lobby, playerId), reconnectToken };
       });
     });
 
@@ -600,7 +725,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
             );
           }
           return {
-            state: lobbyView(lobby, player.id),
+            state: viewLobby(lobby, player.id),
             reconnectToken: retriedToken,
           };
         }
@@ -638,7 +763,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
         }
         emitLobby(lobby);
         return {
-          state: lobbyView(lobby, player.id),
+          state: viewLobby(lobby, player.id),
           reconnectToken: player.reconnectToken,
         };
       });
@@ -685,8 +810,9 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
         }
         lobby.status = "playing";
         cancelWaitingLobbyExpiry(lobby.id);
+        scheduleSelectionDeadline(lobby);
         emitLobby(lobby);
-        return lobbyView(lobby, session.playerId);
+        return viewLobby(lobby, session.playerId);
       });
     });
 
@@ -706,8 +832,9 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
           session.playerId,
           parsed.data.cardId,
         );
+        syncSelectionDeadline(lobby);
         emitLobby(lobby);
-        return lobbyView(lobby, session.playerId);
+        return viewLobby(lobby, session.playerId);
       });
     });
 
@@ -727,8 +854,36 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
           session.playerId,
           parsed.data.cardId,
         );
+        syncSelectionDeadline(lobby);
         emitLobby(lobby);
-        return lobbyView(lobby, session.playerId);
+        return viewLobby(lobby, session.playerId);
+      });
+    });
+
+    socket.on("selection:undo", (input, callback) => {
+      runCommand(callback, () => {
+        const parsed = selectionUndoCommandSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CommandFailure("invalid-input", "Invalid selection undo payload");
+        }
+        const session = requireSession(socket);
+        const lobby = getLobby(session.lobbyId);
+        if (!lobby.game) {
+          throw new CommandFailure("game-not-started", "The game has not started");
+        }
+        if (lobby.game.round.phase === "initial-selection") {
+          lobby.game = undoInitialSelection(lobby.game, session.playerId);
+        } else if (lobby.game.round.phase === "pause-selection") {
+          lobby.game = undoPauseSelection(lobby.game, session.playerId);
+        } else {
+          throw new CommandFailure(
+            "wrong-phase",
+            "Selections cannot be undone after the round resolves",
+          );
+        }
+        syncSelectionDeadline(lobby);
+        emitLobby(lobby);
+        return viewLobby(lobby, session.playerId);
       });
     });
 
@@ -744,8 +899,9 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
           throw new CommandFailure("game-not-started", "The game has not started");
         }
         lobby.game = startNextRound(lobby.game);
+        syncSelectionDeadline(lobby);
         emitLobby(lobby);
-        return lobbyView(lobby, session.playerId);
+        return viewLobby(lobby, session.playerId);
       });
     });
 
