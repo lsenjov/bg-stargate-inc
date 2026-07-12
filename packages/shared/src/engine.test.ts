@@ -10,6 +10,8 @@ import {
   submitInitialSelection,
   submitPauseSelection,
   toPublicGameState,
+  undoInitialSelection,
+  undoPauseSelection,
 } from "./engine.js";
 import type { GameSetup, GameState, PlayerId } from "./model.js";
 
@@ -191,6 +193,62 @@ describe("initial selection and resolution", () => {
     expect(publicState.players.a).not.toHaveProperty("hand");
     expect(publicState.players.a).not.toHaveProperty("reconnectToken");
     expect(publicState.players.a?.handSize).toBe(6);
+  });
+
+  it("undoes a hidden choice without changing either input state", () => {
+    const original = createGame(setup());
+    const selected = submitInitialSelection(
+      submitInitialSelection(original, "a", playerCardId("a", "b")),
+      "b",
+      playerCardId("b", "a"),
+    );
+    const undone = undoInitialSelection(selected, "a");
+
+    expect(original.round.initialSelections).toEqual({});
+    expect(selected.round.initialSelections.a?.id).toBe(playerCardId("a", "b"));
+    expect(selected.round.initialSelections.b?.id).toBe(playerCardId("b", "a"));
+    expect(Object.hasOwn(undone.round.initialSelections, "a")).toBe(false);
+    expect(undone.round.initialSelections.b?.id).toBe(playerCardId("b", "a"));
+    expect(undone.players.a?.hand).toEqual(selected.players.a?.hand);
+    expect(toPublicGameState(undone).round.initialSelectionsSubmittedBy).toEqual([
+      "b",
+    ]);
+  });
+
+  it("allows a new initial choice after undo", () => {
+    const selected = submitInitialSelection(
+      createGame(setup()),
+      "a",
+      playerCardId("a", "b"),
+    );
+    const undone = undoInitialSelection(selected, "a");
+    const reselected = submitInitialSelection(
+      undone,
+      "a",
+      exoplanetCardId("a", "earth"),
+    );
+
+    expect(reselected.round.initialSelections.a?.id).toBe(
+      exoplanetCardId("a", "earth"),
+    );
+  });
+
+  it("rejects initial undo without a submitted choice or after reveal", () => {
+    const game = createGame(setup());
+    expectRuleError(
+      () => undoInitialSelection(game, "a"),
+      "selection-not-submitted",
+    );
+
+    const pausePhase = chooseInitial(game, {
+      a: pauseCardId("a"),
+      b: playerCardId("b", "b"),
+      c: playerCardId("c", "c"),
+    });
+    expectRuleError(
+      () => undoInitialSelection(pausePhase, "a"),
+      "wrong-phase",
+    );
   });
 
   it("connects mutual players and a sole exoplanet claimant", () => {
@@ -396,6 +454,119 @@ describe("pause follow-up", () => {
     });
     expect(game.players.a?.playedCards).toEqual([]);
     expect(game.players.a?.hand).toHaveLength(6);
+  });
+
+  it("undoes a hidden follow-up without changing its input state", () => {
+    const initial = chooseInitial(createGame(setup()), {
+      a: pauseCardId("a"),
+      b: pauseCardId("b"),
+      c: playerCardId("c", "c"),
+    });
+    const selected = submitPauseSelection(
+      initial,
+      "a",
+      playerCardId("a", "b"),
+    );
+    const undone = undoPauseSelection(selected, "a");
+
+    expect(initial.round.pauseSelections).toEqual({});
+    expect(selected.round.pauseSelections.a?.id).toBe(playerCardId("a", "b"));
+    expect(Object.hasOwn(undone.round.pauseSelections, "a")).toBe(false);
+    expect(undone.round.revealedInitialSelections).toEqual(
+      selected.round.revealedInitialSelections,
+    );
+    expect(undone.players.a?.hand).toEqual(selected.players.a?.hand);
+    expect(toPublicGameState(undone).round.pauseSelectionsSubmittedBy).toEqual(
+      [],
+    );
+  });
+
+  it("allows a new pause follow-up after undo", () => {
+    const initial = chooseInitial(createGame(setup()), {
+      a: pauseCardId("a"),
+      b: pauseCardId("b"),
+      c: playerCardId("c", "c"),
+    });
+    const selected = submitPauseSelection(
+      initial,
+      "a",
+      playerCardId("a", "b"),
+    );
+    const undone = undoPauseSelection(selected, "a");
+    const reselected = submitPauseSelection(
+      undone,
+      "a",
+      exoplanetCardId("a", "earth"),
+    );
+
+    expect(reselected.round.pauseSelections.a?.id).toBe(
+      exoplanetCardId("a", "earth"),
+    );
+  });
+
+  it("rejects pause undo for missing, ineligible, and wrong-phase players", () => {
+    const game = createGame(setup());
+    expectRuleError(() => undoPauseSelection(game, "a"), "wrong-phase");
+
+    const pausePhase = chooseInitial(game, {
+      a: pauseCardId("a"),
+      b: pauseCardId("b"),
+      c: playerCardId("c", "c"),
+    });
+    expectRuleError(
+      () => undoPauseSelection(pausePhase, "a"),
+      "selection-not-submitted",
+    );
+    expectRuleError(
+      () => undoPauseSelection(pausePhase, "c"),
+      "player-did-not-pause",
+    );
+  });
+});
+
+describe("selection undo record safety", () => {
+  it("removes prototype-named initial and pause choices from null records", () => {
+    const created = createGame(setup(["__proto__", "constructor", "toString"]));
+    const initialSelected = submitInitialSelection(
+      created,
+      "__proto__",
+      pauseCardId("__proto__"),
+    );
+    const initialUndone = undoInitialSelection(initialSelected, "__proto__");
+
+    expect(Object.hasOwn(initialSelected.round.initialSelections, "__proto__"))
+      .toBe(true);
+    expect(Object.hasOwn(initialUndone.round.initialSelections, "__proto__"))
+      .toBe(false);
+    expect(Object.getPrototypeOf(initialUndone.round.initialSelections)).toBeNull();
+
+    let pausePhase = submitInitialSelection(
+      initialUndone,
+      "__proto__",
+      pauseCardId("__proto__"),
+    );
+    pausePhase = submitInitialSelection(
+      pausePhase,
+      "constructor",
+      pauseCardId("constructor"),
+    );
+    pausePhase = submitInitialSelection(
+      pausePhase,
+      "toString",
+      playerCardId("toString", "toString"),
+    );
+    const pauseSelected = submitPauseSelection(
+      pausePhase,
+      "__proto__",
+      playerCardId("__proto__", "constructor"),
+    );
+    const pauseUndone = undoPauseSelection(pauseSelected, "__proto__");
+
+    expect(Object.hasOwn(pauseSelected.round.pauseSelections, "__proto__"))
+      .toBe(true);
+    expect(Object.hasOwn(pauseUndone.round.pauseSelections, "__proto__"))
+      .toBe(false);
+    expect(Object.getPrototypeOf(pauseUndone.round.pauseSelections)).toBeNull();
   });
 });
 

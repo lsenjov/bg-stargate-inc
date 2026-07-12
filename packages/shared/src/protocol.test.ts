@@ -4,6 +4,7 @@ import {
   exoplanetGestureKinds,
   gestureCommandSchema,
   playerGestureKinds,
+  selectionUndoCommandSchema,
 } from "./protocol.js";
 
 const playerId = "AbCdEfGhIjKlMnOpQrStUv";
@@ -56,5 +57,15 @@ describe("gesture protocol", () => {
     { target: { kind: "unknown", playerId }, gesture: "nod" },
   ])("strictly rejects malformed payload %#", (payload) => {
     expect(gestureCommandSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("selection undo protocol", () => {
+  it("accepts only a strict empty command", () => {
+    expect(selectionUndoCommandSchema.safeParse({}).success).toBe(true);
+
+    for (const payload of [null, [], "undo", { cardId: "card" }, { extra: true }]) {
+      expect(selectionUndoCommandSchema.safeParse(payload).success).toBe(false);
+    }
   });
 });

@@ -163,6 +163,7 @@ function lobbyView(lobby: LobbyState, playerId: PlayerId): LobbyView {
       pauseSelectionCardId:
         lobby.game?.round.pauseSelections[playerId]?.id ?? null,
     },
+    selectionDeadlineAt: null,
   };
 }
 

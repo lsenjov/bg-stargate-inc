@@ -46,6 +46,8 @@ export const selectionCommandSchema = z.strictObject({
   cardId: z.string().min(1).max(256),
 });
 
+export const selectionUndoCommandSchema = z.strictObject({});
+
 export const playerGestureKinds = [
   "beckon",
   "nod",
@@ -88,6 +90,7 @@ export type JoinLobbyCommand = z.input<typeof joinLobbySchema>;
 export type ReconnectLobbyCommand = z.input<typeof reconnectLobbySchema>;
 export type EmptyCommand = z.input<typeof emptyCommandSchema>;
 export type SelectionCommand = z.input<typeof selectionCommandSchema>;
+export type SelectionUndoCommand = z.input<typeof selectionUndoCommandSchema>;
 export type PlayerGestureKind = (typeof playerGestureKinds)[number];
 export type ExoplanetGestureKind = (typeof exoplanetGestureKinds)[number];
 export type PlayerGestureTarget = {
@@ -134,6 +137,7 @@ export type CommandErrorCode =
   | "gesture-target-unavailable"
   | "wrong-phase"
   | "choice-already-submitted"
+  | "selection-not-submitted"
   | "card-unavailable"
   | "player-did-not-pause"
   | "pause-follow-up-must-target";
@@ -168,6 +172,7 @@ export interface PrivatePlayerState {
 export interface LobbyView {
   lobby: PublicLobbyState;
   self: PrivatePlayerState;
+  selectionDeadlineAt: number | null;
 }
 
 export interface SessionData {
@@ -200,6 +205,10 @@ export interface ClientToServerEvents {
   ) => void;
   "selection:pause": (
     command: SelectionCommand,
+    callback: CommandCallback<LobbyView>,
+  ) => void;
+  "selection:undo": (
+    command: SelectionUndoCommand,
     callback: CommandCallback<LobbyView>,
   ) => void;
   "round:next": (

@@ -72,6 +72,7 @@ function waitingView(): LobbyView {
       game: null,
     },
     self: { playerId: "p1", hand: null, initialSelectionCardId: null, pauseSelectionCardId: null },
+    selectionDeadlineAt: null,
   };
 }
 
@@ -117,6 +118,7 @@ function gameView(phase: "initial-selection" | "pause-selection" | "resolved" = 
       },
     },
     self: { playerId: "p1", hand, initialSelectionCardId: null, pauseSelectionCardId: null },
+    selectionDeadlineAt: phase === "resolved" ? null : 30_000,
   };
 }
 

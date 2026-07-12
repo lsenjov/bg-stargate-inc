@@ -89,6 +89,7 @@ function view(playing = false): LobbyView {
       initialSelectionCardId: null,
       pauseSelectionCardId: null,
     },
+    selectionDeadlineAt: null,
   };
 }
 

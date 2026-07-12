@@ -25,6 +25,7 @@ export type GameRuleErrorCode =
   | "unknown-player"
   | "wrong-phase"
   | "choice-already-submitted"
+  | "selection-not-submitted"
   | "card-unavailable"
   | "player-did-not-pause"
   | "pause-follow-up-must-target";
@@ -291,6 +292,29 @@ export function submitInitialSelection(
   return finalizeRound(next);
 }
 
+export function undoInitialSelection(
+  current: GameState,
+  playerId: PlayerId,
+): GameState {
+  if (current.round.phase !== "initial-selection") {
+    throw new GameRuleError(
+      "wrong-phase",
+      "Initial selections are closed for this round",
+    );
+  }
+  getPlayer(current, playerId);
+  if (!Object.hasOwn(current.round.initialSelections, playerId)) {
+    throw new GameRuleError(
+      "selection-not-submitted",
+      "This player has not submitted an initial selection",
+    );
+  }
+
+  const next = cloneGameState(current);
+  delete next.round.initialSelections[playerId];
+  return next;
+}
+
 export function submitPauseSelection(
   current: GameState,
   playerId: PlayerId,
@@ -351,6 +375,35 @@ export function submitPauseSelection(
   }
 
   return finalizeRound(next);
+}
+
+export function undoPauseSelection(
+  current: GameState,
+  playerId: PlayerId,
+): GameState {
+  if (current.round.phase !== "pause-selection") {
+    throw new GameRuleError(
+      "wrong-phase",
+      "Pause follow-up selections are not open",
+    );
+  }
+  getPlayer(current, playerId);
+  if (!current.round.pausePlayerIds.includes(playerId)) {
+    throw new GameRuleError(
+      "player-did-not-pause",
+      "Only a player who revealed pause may undo a follow-up",
+    );
+  }
+  if (!Object.hasOwn(current.round.pauseSelections, playerId)) {
+    throw new GameRuleError(
+      "selection-not-submitted",
+      "This player has not submitted a pause follow-up",
+    );
+  }
+
+  const next = cloneGameState(current);
+  delete next.round.pauseSelections[playerId];
+  return next;
 }
 
 function choiceFor(
