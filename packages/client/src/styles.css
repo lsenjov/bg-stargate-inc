@@ -173,8 +173,9 @@ input::placeholder { color: #8f9694; }
 .orbit-path { fill: none; stroke: #cfcec7; stroke-width: .3; stroke-dasharray: 1.2 1.2; vector-effect: non-scaling-stroke; }
 .gesture-signal line { stroke: #46bdb3; stroke-width: 1.3; stroke-linecap: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px rgba(70,189,179,.78)); stroke-dasharray: 4 2; animation: signal-flow .55s linear infinite; }
 .gesture-signals marker path { fill: #46bdb3; }
-.gesture-signal-badge { width: 31px; height: 31px; position: absolute; z-index: 1; transform: translate(-50%, -50%); display: grid; place-items: center; border: 1px solid #46bdb3; border-radius: 50%; background: var(--paper); color: var(--teal); box-shadow: 0 0 12px rgba(70,189,179,.22); font-size: 15px; font-weight: 800; }
-.comms-target, .comms-self { width: 116px; position: absolute; transform: translate(-50%, -50%); text-align: center; z-index: 1; }
+.gesture-signal-badge { width: 31px; height: 31px; position: absolute; z-index: 1; transform: translate(-50%, -50%); display: grid; place-items: center; border: 1px solid #46bdb3; border-radius: 50%; background: var(--paper); color: var(--teal); box-shadow: 0 0 12px rgba(70,189,179,.22); font-size: 15px; font-weight: 800; animation: gesture-arrive .18s ease-out both; }
+.comms-target, .comms-self { width: 116px; position: absolute; text-align: center; z-index: 1; }
+.comms-target { transform: translate(-50%, -28px); }
 .beacon-button { width: 100%; padding: 3px; border: 0; background: transparent; color: var(--ink); display: grid; justify-items: center; gap: 3px; }
 .beacon-core { width: 50px; height: 50px; display: grid; place-items: center; border: 2px solid currentColor; background: #f3f1e9; color: var(--red-dark); font-family: "DM Mono", monospace; font-size: 11px; clip-path: polygon(50% 0, 94% 25%, 94% 75%, 50% 100%, 6% 75%, 6% 25%); position: relative; }
 .beacon-core::after { content: ""; position: absolute; inset: 5px; border: 1px solid currentColor; clip-path: inherit; opacity: .45; }
@@ -187,7 +188,7 @@ input::placeholder { color: #8f9694; }
 .beacon-button:disabled small { color: var(--red-dark); }
 .beacon-button[aria-expanded="true"] .beacon-core, .beacon-button:hover:not(:disabled) .beacon-core { color: var(--red); box-shadow: 0 0 0 6px rgba(227,75,66,.1), 0 0 20px rgba(227,75,66,.22); }
 .comms-target.receiving .beacon-core, .comms-self.receiving .beacon-core { animation: beacon-receive .7s ease-in-out infinite alternate; }
-.comms-self { display: grid; justify-items: center; gap: 3px; }
+.comms-self { display: grid; justify-items: center; gap: 3px; transform: translate(-50%, -25px); }
 .comms-self .beacon-core { color: var(--teal); background: #e4f1eb; }
 .you-tag { position: absolute; bottom: calc(100% + 4px); padding: 2px 5px; border-radius: 2px; background: var(--teal); color: white; font-family: "DM Mono", monospace; font-size: 7px; letter-spacing: .08em; }
 .gesture-fan { width: 184px; padding: 6px; position: absolute; top: calc(100% + 5px); left: 50%; transform: translateX(-50%); z-index: 10; display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; border: 1px solid #aeb4ae; border-radius: 50% 50% 5px 5px / 20% 20% 5px 5px; background: rgba(247,246,240,.98); box-shadow: 0 13px 30px rgba(30,40,39,.2); }
@@ -218,17 +219,18 @@ footer { margin-top: auto; min-height: 66px; padding: 0 clamp(20px, 4vw, 68px); 
 @keyframes pulse { 50% { opacity: .3; } }
 @keyframes rotate { to { transform: rotate(360deg); } }
 @keyframes signal-flow { to { stroke-dashoffset: -6; } }
+@keyframes gesture-arrive { from { opacity: 0; transform: translate(-50%, -50%) scale(.75); } }
 @keyframes beacon-receive { to { color: #32a99f; transform: scale(1.12); box-shadow: 0 0 0 10px rgba(50,169,159,.1), 0 0 25px rgba(50,169,159,.45); } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }.gesture-signal-badge, .gesture-signal line { animation: none !important; } }
 
 @media (max-width: 760px) {
   .site-header { height: 64px; }.site-header nav { gap: 13px; }.connection-badge { padding: 6px 8px; }.brand { font-size: 16px; }
   main { width: min(100% - 24px, 1180px); }.hero { padding-top: 55px; }.hero::after { right: 0; font-size: clamp(180px, 70vw, 300px); }.hero h1, .lobby-heading h1 { overflow-wrap: anywhere; }.hero p { font-size: 15px; }.entry-grid { grid-template-columns: minmax(0, 1fr); }.entry-panel { min-height: auto; padding: 26px; }.manifest-strip { grid-template-columns: minmax(0, 1fr); }.manifest-strip div { border-right: 0; border-bottom: 1px solid var(--line); }
   .lobby-layout, .game-layout { grid-template-columns: 1fr; padding-top: 45px; }.lobby-heading, .game-heading, .invite-panel, .roster-panel, .start-panel, .hand-panel, .reveal-panel, .results-panel, .state-grid, .next-round, .comms-ring { grid-column: 1; }.start-panel { grid-row: auto; min-height: 270px; }.invite-panel { grid-template-columns: 1fr; }.invite-panel .copy-button { margin-top: 18px; }.invite-code { word-break: break-all; }.roster-panel, .invite-panel, .hand-panel, .reveal-panel, .results-panel { padding: 24px; }.roster-panel li { gap: 9px; }.player-online, .player-offline { font-size: 0; }.player-online::after, .player-offline::after { content: "●"; font-size: 11px; }
-  .comms-ring { padding: 22px 14px 12px; }.comms-ring-header { padding-inline: 7px; }.comms-orbit { height: 430px; }.comms-target, .comms-self { width: 82px; }.beacon-core { width: 42px; height: 42px; }.beacon-button strong, .comms-self strong { font-size: 10px; }.gesture-fan { width: 169px; }
+  .comms-ring { padding: 22px 14px 12px; }.comms-ring-header { padding-inline: 7px; }.comms-orbit { height: 430px; }.comms-target, .comms-self { width: 82px; }.comms-target { transform: translate(-50%, -24px); }.comms-self { transform: translate(-50%, -21px); }.beacon-core { width: 42px; height: 42px; }.beacon-button strong, .comms-self strong { font-size: 10px; }.gesture-fan { width: 169px; }
   .game-heading { display: grid; gap: 20px; }.game-heading > * { min-width: 0; }.round-status { width: 100%; }.selection-countdown, .submission-meter { width: auto; flex: 1; }.card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.game-card { min-height: 190px; }.state-grid { grid-template-columns: minmax(0, 1fr); }.next-round { align-items: stretch; flex-direction: column; gap: 22px; }.next-round .primary-button { width: 100%; }.reveal-panel li { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }.reveal-panel li small { grid-column: 3; }.played-groups > div { grid-template-columns: minmax(0, 75px) minmax(0, 1fr); }
   .modal-backdrop { padding: 0; }.rulebook { padding: 25px 20px; }.feature-list article { grid-template-columns: 80px 1fr; }.rulebook > header p { font-size: 13px; }
   footer { padding: 15px 20px; gap: 15px; } footer > span { display: none; }
 }
 
-@media (max-width: 430px) { .round-status { display: grid; }.selection-countdown, .submission-meter { width: 100%; }.selection-lock { align-items: flex-end; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.game-card { min-height: 160px; }.site-header .text-button { display: none; }.comms-ring-header { display: grid; }.gesture-mute { justify-self: start; }.comms-orbit { height: 470px; }.comms-target, .comms-self { width: 70px; }.beacon-core { width: 37px; height: 37px; }.beacon-button strong, .comms-self strong { font-size: 9px; }.beacon-button small, .comms-self small { font-size: 6px; } }
+@media (max-width: 430px) { .round-status { display: grid; }.selection-countdown, .submission-meter { width: 100%; }.selection-lock { align-items: flex-end; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.game-card { min-height: 160px; }.site-header .text-button { display: none; }.comms-ring-header { display: grid; }.gesture-mute { justify-self: start; }.comms-orbit { height: 470px; }.comms-target, .comms-self { width: 70px; }.comms-target { transform: translate(-50%, -21.5px); }.comms-self { transform: translate(-50%, -18.5px); }.beacon-core { width: 37px; height: 37px; }.beacon-button strong, .comms-self strong { font-size: 9px; }.beacon-button small, .comms-self small { font-size: 6px; } }

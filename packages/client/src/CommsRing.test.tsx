@@ -93,6 +93,50 @@ function view(playing = false): LobbyView {
   };
 }
 
+function maxTargetView(): LobbyView {
+  const current = view(true);
+  const maxPlayers = Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
+    const id = `p${index + 1}`;
+    return [id, { id, name: `Player ${index + 1}`, connected: true }];
+  }));
+  const playerOrder = Object.keys(maxPlayers);
+  return {
+    ...current,
+    lobby: {
+      ...current.lobby,
+      players: maxPlayers,
+      game: {
+        ...current.lobby.game!,
+        playerOrder,
+        exoplanets: Array.from({ length: 4 }, (_, index) => ({ id: `exo-${index + 1}`, name: `Exoplanet ${index + 1}` })),
+        players: Object.fromEntries(playerOrder.map((id) => [id, { ...maxPlayers[id]!, handSize: 0, playedCards: [] }])),
+      },
+    },
+  };
+}
+
+function mockOrbitSize(width: number, height: number): void {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, width, height));
+}
+
+function elementPoint(element: HTMLElement, width: number, height: number): { x: number; y: number } {
+  return {
+    x: Number.parseFloat(element.style.left) * width / 100,
+    y: Number.parseFloat(element.style.top) * height / 100,
+  };
+}
+
+function linePoint(line: SVGLineElement, end: "start" | "end", width: number, height: number): { x: number; y: number } {
+  return {
+    x: Number(line.getAttribute(end === "start" ? "x1" : "x2")) * width / 100,
+    y: Number(line.getAttribute(end === "start" ? "y1" : "y2")) * height / 100,
+  };
+}
+
+function distance(left: { x: number; y: number }, right: { x: number; y: number }): number {
+  return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
 function asSocket(socket: FakeSocket): GameSocket {
   return socket as unknown as GameSocket;
 }
@@ -138,6 +182,127 @@ describe("Comms Ring", () => {
     act(() => socket.serverEmit("gesture:received", gesture({ senderPlayerId: "p1", target: { kind: "player", playerId: "p2" }, gesture: "wave" })));
     expect(document.querySelectorAll(".gesture-signal")).toHaveLength(1);
     expect(screen.getByRole("status").textContent).toBe("Nova waves to Vega.");
+  });
+
+  it("places the gesture beside its sender and starts the line beyond the badge", () => {
+    const socket = new FakeSocket();
+    render(<CommsRing socket={asSocket(socket)} view={view()} disabled={false} onError={vi.fn()} />);
+
+    act(() => socket.serverEmit("gesture:received", gesture({ senderPlayerId: "p1", target: { kind: "player", playerId: "p2" }, gesture: "wave" })));
+
+    const badge = document.querySelector<HTMLElement>(".gesture-signal-badge");
+    const line = document.querySelector<SVGLineElement>(".gesture-signal line");
+    expect(badge).not.toBeNull();
+    expect(line).not.toBeNull();
+    const badgeLeft = Number.parseFloat(badge?.style.left ?? "");
+    const badgeTop = Number.parseFloat(badge?.style.top ?? "");
+    const lineStartX = Number(line?.getAttribute("x1"));
+    const lineEndX = Number(line?.getAttribute("x2"));
+
+    expect(badgeLeft).toBeGreaterThan(31);
+    expect(badgeLeft).toBeLessThan(50);
+    expect(badgeTop).toBeGreaterThan(82);
+    expect(lineStartX).toBeLessThan(badgeLeft);
+    expect(lineEndX).toBeGreaterThan(12);
+    expect(screen.getByRole("button", { name: "Gesture to Vega, player" }).closest(".comms-target")?.classList.contains("receiving")).toBe(true);
+  });
+
+  it("separates concurrent gestures on the same route", () => {
+    const socket = new FakeSocket();
+    render(<CommsRing socket={asSocket(socket)} view={view()} disabled={false} onError={vi.fn()} />);
+
+    act(() => {
+      socket.serverEmit("gesture:received", gesture());
+      socket.serverEmit("gesture:received", gesture({ id: "gesture-2", gesture: "wave" }));
+    });
+
+    const badges = Array.from(document.querySelectorAll<HTMLElement>(".gesture-signal-badge"));
+    expect(badges).toHaveLength(2);
+    expect(document.querySelectorAll(".gesture-signal")).toHaveLength(2);
+    expect(badges[0]?.style.left).not.toBe(badges[1]?.style.left);
+    expect(badges[0]?.style.top).not.toBe(badges[1]?.style.top);
+  });
+
+  it("preserves badge and beacon-core anchor clearances in a measured narrow orbit", () => {
+    const width = 320;
+    const height = 470;
+    mockOrbitSize(width, height);
+    const socket = new FakeSocket();
+    render(<CommsRing socket={asSocket(socket)} view={view()} disabled={false} onError={vi.fn()} />);
+
+    act(() => socket.serverEmit("gesture:received", gesture({ senderPlayerId: "p1", target: { kind: "player", playerId: "p2" } })));
+
+    const badge = document.querySelector<HTMLElement>(".gesture-signal-badge")!;
+    const line = document.querySelector<SVGLineElement>(".gesture-signal line")!;
+    const sender = document.querySelector<HTMLElement>(".comms-self")!;
+    const target = screen.getByRole("button", { name: "Gesture to Vega, player" }).closest<HTMLElement>(".comms-target")!;
+    const badgePoint = elementPoint(badge, width, height);
+    const senderPoint = elementPoint(sender, width, height);
+    const targetPoint = elementPoint(target, width, height);
+
+    expect(distance(badgePoint, senderPoint)).toBeCloseTo(44, 5);
+    expect(distance(linePoint(line, "start", width, height), badgePoint)).toBeCloseTo(18, 5);
+    expect(distance(linePoint(line, "end", width, height), targetPoint)).toBeCloseTo(29, 5);
+  });
+
+  it("uses a perpendicular badge route between adjacent targets at maximum ring capacity", () => {
+    const width = 140;
+    const height = 470;
+    mockOrbitSize(width, height);
+    const socket = new FakeSocket();
+    render(<CommsRing socket={asSocket(socket)} view={maxTargetView()} disabled={false} onError={vi.fn()} />);
+
+    act(() => socket.serverEmit("gesture:received", gesture({ senderPlayerId: "p7", target: { kind: "player", playerId: "p8" } })));
+
+    const badge = document.querySelector<HTMLElement>(".gesture-signal-badge");
+    const line = document.querySelector<SVGLineElement>(".gesture-signal line");
+    expect(badge).not.toBeNull();
+    expect(line).not.toBeNull();
+    const sender = screen.getByRole("button", { name: "Gesture to Player 7, player" }).closest<HTMLElement>(".comms-target")!;
+    const target = screen.getByRole("button", { name: "Gesture to Player 8, player" }).closest<HTMLElement>(".comms-target")!;
+    const badgePoint = elementPoint(badge!, width, height);
+    const senderPoint = elementPoint(sender, width, height);
+    const targetPoint = elementPoint(target, width, height);
+    const route = { x: targetPoint.x - senderPoint.x, y: targetPoint.y - senderPoint.y };
+    const badgeOffset = { x: badgePoint.x - senderPoint.x, y: badgePoint.y - senderPoint.y };
+
+    expect(distance(badgePoint, senderPoint)).toBeGreaterThan(44);
+    expect(distance(badgePoint, targetPoint)).toBeGreaterThanOrEqual(53);
+    expect(Math.abs(route.x * badgeOffset.x + route.y * badgeOffset.y)).toBeLessThan(.001);
+    expect(distance(linePoint(line!, "start", width, height), linePoint(line!, "end", width, height))).toBeGreaterThanOrEqual(6);
+  });
+
+  it("avoids badge collisions for concurrent gestures from one sender to different targets", () => {
+    const width = 320;
+    const height = 470;
+    mockOrbitSize(width, height);
+    const socket = new FakeSocket();
+    render(<CommsRing socket={asSocket(socket)} view={maxTargetView()} disabled={false} onError={vi.fn()} />);
+
+    act(() => {
+      socket.serverEmit("gesture:received", gesture({ senderPlayerId: "p1", target: { kind: "player", playerId: "p2" } }));
+      socket.serverEmit("gesture:received", gesture({ id: "gesture-2", senderPlayerId: "p1", target: { kind: "player", playerId: "p3" } }));
+    });
+
+    const badges = Array.from(document.querySelectorAll<HTMLElement>(".gesture-signal-badge"));
+    expect(badges).toHaveLength(2);
+    expect(distance(elementPoint(badges[0]!, width, height), elementPoint(badges[1]!, width, height))).toBeGreaterThanOrEqual(35);
+  });
+
+  it("keeps a non-adjacent route badge clear of an intervening beacon", () => {
+    const width = 268;
+    const height = 470;
+    mockOrbitSize(width, height);
+    const socket = new FakeSocket();
+    render(<CommsRing socket={asSocket(socket)} view={maxTargetView()} disabled={false} onError={vi.fn()} />);
+
+    act(() => socket.serverEmit("gesture:received", gesture({ senderPlayerId: "p3", target: { kind: "player", playerId: "p5" } })));
+
+    const badge = document.querySelector<HTMLElement>(".gesture-signal-badge");
+    expect(badge).not.toBeNull();
+    const intervening = screen.getByRole("button", { name: "Gesture to Player 4, player" }).closest<HTMLElement>(".comms-target")!;
+
+    expect(distance(elementPoint(badge!, width, height), elementPoint(intervening, width, height))).toBeGreaterThanOrEqual(44);
   });
 
   it("offers only exoplanet gestures and sends the typed exoplanet target", () => {

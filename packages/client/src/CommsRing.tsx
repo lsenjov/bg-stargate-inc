@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -49,6 +50,18 @@ type UnpositionedRingTarget = RingTargetBase & (
 interface Point {
   x: number;
   y: number;
+}
+
+interface OrbitSize {
+  width: number;
+  height: number;
+}
+
+interface SignalLayout {
+  badge: Point;
+  badgePixels: Point;
+  lineFrom: Point;
+  lineTo: Point;
 }
 
 type RingTarget = UnpositionedRingTarget & Point;
@@ -140,6 +153,95 @@ function pointForTarget(view: LobbyView, targets: RingTarget[], target: GestureT
   return match ? { x: match.x, y: match.y } : null;
 }
 
+const badgeOrbitRadius = 44;
+const badgeTargetClearance = 53;
+const badgeCollisionClearance = 35;
+const beaconCollisionClearance = 44;
+const badgeBoundaryClearance = 16;
+const lineBadgeClearance = 18;
+const lineTargetClearance = 29;
+
+function rotate(point: Point, degrees: number): Point {
+  const radians = degrees * Math.PI / 180;
+  return {
+    x: point.x * Math.cos(radians) - point.y * Math.sin(radians),
+    y: point.x * Math.sin(radians) + point.y * Math.cos(radians),
+  };
+}
+
+function badgeCandidates(from: Point, to: Point, direction: Point, distance: number, orbit: OrbitSize, needsPerpendicularRoute: boolean): Point[] {
+  const offsets = Array.from({ length: 24 }, (_, index) => index * 15 - 180);
+  offsets.sort((left, right) => {
+    const preference = (offset: number) => needsPerpendicularRoute
+      ? Math.min(Math.abs(offset - 90), Math.abs(offset + 90))
+      : Math.abs(offset);
+    return preference(left) - preference(right) || right - left;
+  });
+  return offsets.map((offset) => {
+    const candidateDirection = rotate(direction, offset);
+    const minimumCandidate = {
+      x: from.x + candidateDirection.x * badgeOrbitRadius,
+      y: from.y + candidateDirection.y * badgeOrbitRadius,
+    };
+    const minimumTargetDistance = Math.hypot(to.x - minimumCandidate.x, to.y - minimumCandidate.y);
+    const cosine = direction.x * candidateDirection.x + direction.y * candidateDirection.y;
+    const requiredRadius = minimumTargetDistance >= badgeTargetClearance
+      ? badgeOrbitRadius
+      : distance * cosine + Math.sqrt(Math.max(0, badgeTargetClearance ** 2 - distance ** 2 * (1 - cosine ** 2))) + .01;
+    const radius = Math.max(badgeOrbitRadius, requiredRadius);
+    return {
+      x: from.x + candidateDirection.x * radius,
+      y: from.y + candidateDirection.y * radius,
+    };
+  }).filter(({ x, y }) =>
+    x >= badgeBoundaryClearance
+    && x <= orbit.width - badgeBoundaryClearance
+    && y >= badgeBoundaryClearance
+    && y <= orbit.height - badgeBoundaryClearance,
+  );
+}
+
+function signalLayout(from: Point, to: Point, orbit: OrbitSize, occupiedBadges: Point[], unrelatedBeacons: Point[]): SignalLayout | null {
+  const fromPixels = { x: from.x * orbit.width / 100, y: from.y * orbit.height / 100 };
+  const toPixels = { x: to.x * orbit.width / 100, y: to.y * orbit.height / 100 };
+  const delta = { x: toPixels.x - fromPixels.x, y: toPixels.y - fromPixels.y };
+  const distance = Math.hypot(delta.x, delta.y);
+  if (distance < 1) return null;
+
+  const direction = { x: delta.x / distance, y: delta.y / distance };
+  const candidates = badgeCandidates(fromPixels, toPixels, direction, distance, orbit, distance - badgeOrbitRadius < badgeTargetClearance);
+  const badgePixels = candidates.find((candidate) =>
+    Math.hypot(toPixels.x - candidate.x, toPixels.y - candidate.y) >= badgeTargetClearance
+    && occupiedBadges.every((occupied) => Math.hypot(occupied.x - candidate.x, occupied.y - candidate.y) >= badgeCollisionClearance)
+    && unrelatedBeacons.every((beacon) => Math.hypot(beacon.x - candidate.x, beacon.y - candidate.y) >= beaconCollisionClearance),
+  );
+  if (!badgePixels) return null;
+
+  const badgeToTarget = { x: toPixels.x - badgePixels.x, y: toPixels.y - badgePixels.y };
+  const remainingDistance = Math.hypot(badgeToTarget.x, badgeToTarget.y);
+  const lineDirection = {
+    x: badgeToTarget.x / remainingDistance,
+    y: badgeToTarget.y / remainingDistance,
+  };
+  const asPercent = (point: Point): Point => ({
+    x: point.x / orbit.width * 100,
+    y: point.y / orbit.height * 100,
+  });
+
+  return {
+    badge: asPercent(badgePixels),
+    badgePixels,
+    lineFrom: asPercent({
+      x: badgePixels.x + lineDirection.x * lineBadgeClearance,
+      y: badgePixels.y + lineDirection.y * lineBadgeClearance,
+    }),
+    lineTo: asPercent({
+      x: toPixels.x - lineDirection.x * lineTargetClearance,
+      y: toPixels.y - lineDirection.y * lineTargetClearance,
+    }),
+  };
+}
+
 export function CommsRing({ socket, view, disabled, onError }: CommsRingProps) {
   const [selected, setSelected] = useState<RingTarget | null>(null);
   const [pending, setPending] = useState(false);
@@ -154,12 +256,30 @@ export function CommsRing({ socket, view, disabled, onError }: CommsRingProps) {
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const muteButtonRef = useRef<HTMLButtonElement | null>(null);
   const menuButtons = useRef<Array<HTMLButtonElement | null>>([]);
+  const orbitRef = useRef<HTMLDivElement | null>(null);
+  const [orbitSize, setOrbitSize] = useState<OrbitSize>({ width: 1_000, height: 390 });
   const markerId = `gesture-arrow-${useId().replaceAll(":", "")}`;
   const targets = useMemo(() => positionedTargets(view), [view]);
   const self = view.lobby.players[view.self.playerId];
 
   viewRef.current = view;
   mutedRef.current = muted;
+
+  useLayoutEffect(() => {
+    const orbit = orbitRef.current;
+    if (!orbit) return;
+    const measure = () => {
+      const { width, height } = orbit.getBoundingClientRect();
+      if (width > 0 && height > 0) {
+        setOrbitSize((current) => current.width === width && current.height === height ? current : { width, height });
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(orbit);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const onGesture = (event: GestureEvent) => {
@@ -265,10 +385,28 @@ export function CommsRing({ socket, view, disabled, onError }: CommsRingProps) {
     : exoplanetGestureKinds.map((gesture) => ({ gesture, command: { target: selected.target, gesture } }));
   const activeTargetKeys = new Set(activeEvents.map(({ target }) => targetKey(target)));
   const selfReceiving = activeTargetKeys.has(`player:${view.self.playerId}`);
+  const asPixels = (point: Point): Point => ({
+    x: point.x * orbitSize.width / 100,
+    y: point.y * orbitSize.height / 100,
+  });
+  const beaconCenters = new Map<string, Point>([
+    [`player:${view.self.playerId}`, asPixels({ x: 50, y: 88 })],
+    ...targets.map((target): [string, Point] => [target.key, asPixels(target)]),
+  ]);
+  const senderBadges = new Map<string, Point[]>();
   const signalEvents = activeEvents.flatMap((event) => {
     const from = pointForPlayer(view, targets, event.senderPlayerId);
     const to = pointForTarget(view, targets, event.target);
-    return from && to ? [{ event, from, to }] : [];
+    if (!from || !to) return [];
+    const occupiedBadges = senderBadges.get(event.senderPlayerId) ?? [];
+    const senderKey = `player:${event.senderPlayerId}`;
+    const eventTargetKey = targetKey(event.target);
+    const unrelatedBeacons = [...beaconCenters.entries()]
+      .filter(([key]) => key !== senderKey && key !== eventTargetKey)
+      .map(([, point]) => point);
+    const layout = signalLayout(from, to, orbitSize, occupiedBadges, unrelatedBeacons);
+    if (layout) senderBadges.set(event.senderPlayerId, [...occupiedBadges, layout.badgePixels]);
+    return layout ? [{ event, layout }] : [];
   });
   const onMenuKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     if (event.key === "Escape") {
@@ -294,17 +432,17 @@ export function CommsRing({ socket, view, disabled, onError }: CommsRingProps) {
       <div><div className="eyebrow">COMMS RING // PUBLIC SIGNALS</div><h2 id="comms-ring-title">Read the room</h2><p>Choose a beacon. Every signal is public and non-binding.</p></div>
       <button ref={muteButtonRef} className="gesture-mute" type="button" aria-pressed={muted} onClick={toggleMuted}><span aria-hidden="true">{muted ? "○" : "◉"}</span>{muted ? "Gestures muted" : "Mute gestures"}</button>
     </header>
-    <div className="comms-orbit">
+    <div className="comms-orbit" ref={orbitRef}>
       <svg className="gesture-signals" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <defs><marker id={markerId} markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto"><path d="M0,0 L5,2.5 L0,5 z" /></marker></defs>
         <ellipse className="orbit-path" cx="50" cy="49" rx="43" ry="36" />
-        {signalEvents.map(({ event, from, to }) => <g className="gesture-signal" key={event.id}>
-          <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} markerEnd={`url(#${markerId})`} />
+        {signalEvents.map(({ event, layout }) => <g className="gesture-signal" key={event.id}>
+          <line x1={layout.lineFrom.x} y1={layout.lineFrom.y} x2={layout.lineTo.x} y2={layout.lineTo.y} markerEnd={`url(#${markerId})`} />
         </g>)}
       </svg>
-      {signalEvents.map(({ event, from, to }) => <span
+      {signalEvents.map(({ event, layout }) => <span
         className="gesture-signal-badge"
-        style={{ left: `${(from.x + to.x) / 2}%`, top: `${(from.y + to.y) / 2}%` }}
+        style={{ left: `${layout.badge.x}%`, top: `${layout.badge.y}%` }}
         aria-hidden="true"
         key={`badge:${event.id}`}
       >{gestureDetails[event.gesture].icon}</span>)}
