@@ -22,6 +22,7 @@ import {
 } from "@stargate-inc/shared";
 
 import { createGameSocket, type GameSocket } from "./socket.js";
+import { CommsRing } from "./CommsRing.js";
 
 interface SavedSession {
   lobbyId: string;
@@ -274,8 +275,8 @@ export function App({ socket: suppliedSocket }: AppProps) {
         <main className="center-stage"><EmptyState title="Seat moved" body="This seat is active in another browser. Return home to join with a different seat." action={<button className="primary-button" onClick={returnHome}>Return home</button>} /></main>
       ) : view ? (
         view.lobby.status === "waiting"
-          ? <LobbyScreen socket={socket} view={view} unavailable={unavailable} pending={pending} run={run} />
-          : <GameScreen socket={socket} view={view} unavailable={unavailable} pending={pending} run={run} />
+          ? <LobbyScreen socket={socket} view={view} unavailable={unavailable} pending={pending} run={run} onError={setError} />
+          : <GameScreen socket={socket} view={view} unavailable={unavailable} pending={pending} run={run} onError={setError} />
       ) : (
         <WelcomeScreen socket={socket} unavailable={unavailable} pending={pending} run={run} onSession={(data) => { const nextSession = saveSession(data); sessionRef.current = nextSession; setView(data.state); setSavedSession(nextSession); }} openRulebook={openRulebook} />
       )}
@@ -333,7 +334,7 @@ function WelcomeScreen({ socket, unavailable, pending, run, onSession, openRuleb
   </main>;
 }
 
-function LobbyScreen({ socket, view, unavailable, pending, run }: { socket: GameSocket; view: LobbyView; unavailable: boolean; pending: string | null; run: RunCommand }) {
+function LobbyScreen({ socket, view, unavailable, pending, run, onError }: { socket: GameSocket; view: LobbyView; unavailable: boolean; pending: string | null; run: RunCommand; onError: (message: string | null) => void }) {
   const players = Object.values(view.lobby.players);
   const isHost = view.self.playerId === view.lobby.hostPlayerId;
   const canStart = players.length >= 3 && players.every(({ connected }) => connected);
@@ -350,13 +351,14 @@ function LobbyScreen({ socket, view, unavailable, pending, run }: { socket: Game
   };
   return <main className="lobby-layout">
     <section className="lobby-heading"><div className="eyebrow">PRIVATE LOBBY // WAITING ROOM</div><h1>Assemble your <em>network.</em></h1><p>Share the code. The host can start once 3–8 players are connected.</p></section>
+    <CommsRing socket={socket} view={view} disabled={unavailable} onError={onError} />
     <section className="panel invite-panel" aria-labelledby="invite-title"><div><div className="eyebrow">INVITE CODE</div><h2 id="invite-title" className="invite-code">{view.lobby.joinCode}</h2></div><button className="copy-button" onClick={() => void copy(view.lobby.joinCode, "Code copied")}>Copy code</button><div className="invite-link"><span>{inviteUrl}</span><button onClick={() => void copy(inviteUrl, "Link copied")} aria-label="Copy invite link">Copy link</button></div><div className="copy-status" role="status" aria-live="polite">{copied}</div></section>
     <section className="panel roster-panel" aria-labelledby="roster-title"><div className="section-title"><div><div className="eyebrow">CREW ROSTER</div><h2 id="roster-title">{players.length} / 8 connected</h2></div><span className="pulse-label"><i />LIVE</span></div><ul>{players.map((player, index) => <li key={player.id}><span className="avatar">{String(index + 1).padStart(2, "0")}</span><strong>{player.name}{player.id === view.self.playerId && <small> YOU</small>}</strong>{player.id === view.lobby.hostPlayerId && <span className="host-label">HOST</span>}<span className={player.connected ? "player-online" : "player-offline"}>{player.connected ? "Connected" : "Disconnected"}</span></li>)}</ul></section>
     <aside className="start-panel panel"><div><div className="eyebrow">HOST CONTROLS</div><h2>{isHost ? "Ready to launch?" : "Waiting for host"}</h2><p>{players.length < 3 ? `${3 - players.length} more ${3 - players.length === 1 ? "player" : "players"} needed.` : !players.every(({ connected }) => connected) ? "All players must reconnect first." : "All connected. The round can begin."}</p></div>{isHost ? <button className="primary-button" disabled={unavailable || !canStart} onClick={() => run("Starting game", (callback) => socket.emit("game:start", {}, callback))}>{pending === "Starting game" ? "Launching…" : `Start game · ${players.length} players`}<span aria-hidden="true">→</span></button> : <div className="waiting-indicator"><span /><span /><span />Standing by</div>}</aside>
   </main>;
 }
 
-function GameScreen({ socket, view, unavailable, pending, run }: { socket: GameSocket; view: LobbyView; unavailable: boolean; pending: string | null; run: RunCommand }) {
+function GameScreen({ socket, view, unavailable, pending, run, onError }: { socket: GameSocket; view: LobbyView; unavailable: boolean; pending: string | null; run: RunCommand; onError: (message: string | null) => void }) {
   const game = view.lobby.game;
   if (!game || !view.self.hand) return <main className="center-stage"><EmptyState title="Loading game" body="Waiting for the server to send your private hand." /></main>;
   const round = game.round;
@@ -390,6 +392,7 @@ function GameScreen({ socket, view, unavailable, pending, run }: { socket: GameS
 
   return <main className="game-layout">
     <section className="game-heading"><div><div className="eyebrow">ROUND {String(round.number).padStart(2, "0")} // {round.phase.replace("-", " ").toUpperCase()}</div><h1>{phaseTitle}</h1><p>{phaseBody}</p></div><div className="submission-meter" aria-label={meter.label}><strong>{meter.value}</strong><span>{meter.status}</span><div><i style={{ width: `${meter.progress}%` }} /></div></div></section>
+    <CommsRing socket={socket} view={view} disabled={unavailable} onError={onError} />
     {mayChoose && <section className="panel hand-panel" aria-labelledby="hand-title"><div className="section-title"><div><div className="eyebrow">PRIVATE // ONLY YOU CAN SEE THIS</div><h2 id="hand-title">Your hand</h2></div>{selfSubmitted && <span className="locked-label">✓ Selection locked</span>}</div>{eligibleCards.length ? <div className="card-grid">{eligibleCards.map((card) => <button className={`game-card ${card.kind} ${selfSubmitted && selectionCardId === card.id ? "selected" : ""}`} key={card.id} disabled={unavailable || selfSubmitted} onClick={() => submit(card)}><span className="card-type">{cardKindLabel(card)}</span><strong>{cardLabel(view, card)}</strong><small>{card.kind === "pause" ? "Reveal after the others" : card.kind === "player" && card.targetPlayerId === view.self.playerId ? "Return played cards to hand" : "Attempt connection"}</small><span className="card-action">{selfSubmitted && selectionCardId === card.id ? "Locked" : "Select"}</span></button>)}</div> : <EmptyState title="No target cards left" body="Your hand has no valid choice for this phase." />}</section>}
     {!mayChoose && round.phase !== "resolved" && <section className="panel waiting-panel"><div className="orbit" aria-hidden="true"><i /></div><h2>{selfSubmitted || !isPausePlayer ? "Choice secured" : "Waiting for your turn"}</h2><p>Waiting for {Math.max(0, expectedCount - submittedCount)} {Math.max(0, expectedCount - submittedCount) === 1 ? "player" : "players"} to submit.</p></section>}
     {round.revealedInitialSelections && <RevealPanel title="Initial reveal" selections={round.revealedInitialSelections} view={view} />}
