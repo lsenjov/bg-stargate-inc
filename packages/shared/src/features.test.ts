@@ -25,6 +25,7 @@ describe("feature manifest", () => {
     expect(playableFeatureIds).toEqual([
       "online-lobbies",
       "host-controlled-start",
+      "public-gestures",
       "secret-simultaneous-selection",
       "played-card-exhaustion",
       "pause-follow-up",
@@ -49,6 +50,15 @@ describe("feature manifest", () => {
     expect(getFeature("repeated-round-advancement")?.rule).toContain(
       "card state carried forward",
     );
+  });
+
+  it("states the playable public gesture limits", () => {
+    const gestures = getFeature("public-gestures");
+
+    expect(gestures?.status).toBe("playable");
+    expect(gestures?.rule).toContain("fixed, public, non-binding");
+    expect(gestures?.rule).toContain("other connected players");
+    expect(gestures?.rule).toContain("current game's exoplanets");
   });
 
   it("keeps undefined rewards visibly unresolved", () => {

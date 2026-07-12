@@ -24,6 +24,13 @@ export const gameFeatures = [
     rule: "Only the host may start a game, once the lobby has 3 to 8 players and every seated player is connected.",
   },
   {
+    id: "public-gestures",
+    area: "online-play",
+    name: "Public gestures",
+    status: "playable",
+    rule: "Players may send fixed, public, non-binding gestures aimed at other connected players or the current game's exoplanets.",
+  },
+  {
     id: "secret-simultaneous-selection",
     area: "connection-round",
     name: "Secret simultaneous selection",
