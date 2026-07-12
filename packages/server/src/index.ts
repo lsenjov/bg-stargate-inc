@@ -1,4 +1,4 @@
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { playableFeatureIds } from "@stargate-inc/shared";
 
@@ -14,8 +14,12 @@ export const serverFoundation = {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number.parseInt(process.env.PORT ?? "3001", 10);
+  const clientDistPath = process.env.CLIENT_DIST_PATH ?? fileURLToPath(
+    new URL("../../client/dist", import.meta.url),
+  );
   const { httpServer } = createGameServer({
     corsOrigin: process.env.CLIENT_ORIGIN ?? "http://localhost:5173",
+    clientDistPath,
   });
   httpServer.listen(port, () => {
     process.stdout.write(`Stargate Inc server listening on port ${port}\n`);

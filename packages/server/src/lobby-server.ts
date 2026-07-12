@@ -28,6 +28,8 @@ import {
 } from "@stargate-inc/shared";
 import { Server, type Socket } from "socket.io";
 
+import { createHttpHandler } from "./http-handler.js";
+
 type GameSocket = Socket<
   ClientToServerEvents,
   ServerToClientEvents,
@@ -55,6 +57,7 @@ interface ReconnectTokenGrace {
 
 export interface GameServerOptions {
   corsOrigin?: string | string[];
+  clientDistPath?: string;
   reconnectTokenGraceMs?: number;
   abandonedLobbyTtlMs?: number;
   waitingLobbyTtlMs?: number;
@@ -187,10 +190,7 @@ function runCommand<T>(
 }
 
 export function createGameServer(options: GameServerOptions = {}): GameServer {
-  const httpServer = createServer((_, response) => {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ status: "ok" }));
-  });
+  const httpServer = createServer(createHttpHandler(options.clientDistPath));
   const io = new Server<
     ClientToServerEvents,
     ServerToClientEvents,
