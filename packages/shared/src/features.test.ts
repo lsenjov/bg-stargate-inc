@@ -24,6 +24,7 @@ describe("feature manifest", () => {
   it("marks every implemented connection rule as playable", () => {
     expect(playableFeatureIds).toEqual([
       "online-lobbies",
+      "host-controlled-start",
       "secret-simultaneous-selection",
       "played-card-exhaustion",
       "pause-follow-up",
@@ -31,7 +32,23 @@ describe("feature manifest", () => {
       "exclusive-exoplanet-connection",
       "pause-exoplanet-retry",
       "self-connection-reset",
+      "repeated-round-advancement",
     ]);
+  });
+
+  it("states the playable lobby start and repeated-round conditions", () => {
+    expect(getFeature("host-controlled-start")?.rule).toContain(
+      "3 to 8 players",
+    );
+    expect(getFeature("host-controlled-start")?.rule).toContain(
+      "every seated player is connected",
+    );
+    expect(getFeature("repeated-round-advancement")?.rule).toContain(
+      "After resolution",
+    );
+    expect(getFeature("repeated-round-advancement")?.rule).toContain(
+      "card state carried forward",
+    );
   });
 
   it("keeps undefined rewards visibly unresolved", () => {

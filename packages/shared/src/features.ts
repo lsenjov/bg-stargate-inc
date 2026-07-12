@@ -17,6 +17,13 @@ export const gameFeatures = [
     rule: "Players create or join a server-hosted lobby for 3 to 8 players and can securely reconnect to their seat.",
   },
   {
+    id: "host-controlled-start",
+    area: "online-play",
+    name: "Host-controlled game start",
+    status: "playable",
+    rule: "Only the host may start a game, once the lobby has 3 to 8 players and every seated player is connected.",
+  },
+  {
     id: "secret-simultaneous-selection",
     area: "connection-round",
     name: "Secret simultaneous selection",
@@ -64,6 +71,13 @@ export const gameFeatures = [
     name: "Self-connection card reset",
     status: "playable",
     rule: "Choosing yourself connects and returns all of your face-up selection cards to hand.",
+  },
+  {
+    id: "repeated-round-advancement",
+    area: "connection-round",
+    name: "Repeated round advancement",
+    status: "playable",
+    rule: "After resolution, any player may advance to the next numbered connection round, with card state carried forward under the exhaustion and reset rules.",
   },
   {
     id: "trade-reward",

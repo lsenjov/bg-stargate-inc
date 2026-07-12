@@ -26,9 +26,9 @@ npm run lint
 npm run check        # typecheck, lint, tests, and production build
 ```
 
-`npm start` requires `npm run build` first. It listens on `PORT` (default `3001`), serves `/health`, serves client assets with SPA fallback, and hosts Socket.IO on the same origin.
+`npm start` requires `npm run build` first. It refuses to listen unless the client `index.html` and its referenced JavaScript bundle are present, then listens on `PORT` (default `3001`), serves `/health`, serves client assets with SPA fallback, and hosts Socket.IO on the same origin.
 
-Environment variables are documented in [`.env.example`](.env.example). They are runtime shell variables; the server does not load dotenv files. `CLIENT_ORIGIN` is only needed to permit a separate browser origin. Production clients normally use the service origin. `CLIENT_DIST_PATH` overrides the built client directory. For a non-default development server address, put `VITE_DEV_SERVER_URL` in `packages/client/.env` before starting Vite.
+Environment variables are documented in [`.env.example`](.env.example). They are runtime shell variables; the server does not load dotenv files. `CLIENT_ORIGIN` is only needed to permit a separate browser origin. Production clients normally use the service origin. `CLIENT_DIST_PATH` overrides the built client directory and must point to a complete production build containing `index.html` and its referenced JavaScript bundle. For a non-default development server address, put `VITE_DEV_SERVER_URL` in `packages/client/.env` before starting Vite.
 
 ## Current playable scope
 
@@ -55,7 +55,7 @@ These bounds are abuse guards for the first deploy, not a capacity guarantee. Du
 
 ## Deploy
 
-The Docker image builds the React client and TypeScript server, then runs one production HTTP service as a non-root user.
+The Docker image builds the React client and TypeScript server, then runs one production HTTP service as a non-root user. Its runtime stage installs only the server and shared workspaces' production dependencies; the browser client is copied as static files.
 
 ```sh
 docker build -t stargate-inc .

@@ -20,8 +20,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/package.json
 COPY packages/server/package.json packages/server/package.json
-COPY packages/client/package.json packages/client/package.json
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts \
+  --workspace=@stargate-inc/shared \
+  --workspace=@stargate-inc/server \
+  --include-workspace-root=false \
+  && npm cache clean --force
 
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/server/dist packages/server/dist
