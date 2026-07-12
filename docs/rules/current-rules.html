@@ -23,7 +23,7 @@
 
       <section>
         <h2>Players</h2>
-        <p>Target player count: unresolved.</p>
+        <p>Player count: 3-8.</p>
         <p>Target play time: unresolved.</p>
       </section>
 
@@ -35,9 +35,10 @@
       <section>
         <h2>Components</h2>
         <ul>
+          <li>Middle exoplanets: 2-4.</li>
+          <li>Selection cards: each player has one card for each player, including themself; one card for each exoplanet in the middle; and one pause card.</li>
           <li>Board or map: unresolved.</li>
           <li>Stargate pieces: unresolved.</li>
-          <li>Cards: unresolved.</li>
           <li>Currency or resource tokens: unresolved.</li>
           <li>Player aids: unresolved.</li>
         </ul>
@@ -47,6 +48,8 @@
         <h2>Setup</h2>
         <ol>
           <li>Place the board or map.</li>
+          <li>Place 2-4 exoplanets in the middle.</li>
+          <li>Give each player their selection cards.</li>
           <li>Give each player their starting pieces and resources.</li>
           <li>Prepare card decks, markets, or public objectives.</li>
           <li>Choose a first player.</li>
@@ -56,12 +59,35 @@
 
       <section>
         <h2>Turn Structure</h2>
-        <p>Unresolved. Candidate structure:</p>
+        <p>Unresolved outside the connection selection round. Candidate structure:</p>
         <ol>
           <li>Income or refresh.</li>
-          <li>Take actions.</li>
+          <li>Resolve a connection selection round.</li>
           <li>Resolve connections, contracts, or events.</li>
           <li>Cleanup.</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>Connection Selection Round</h2>
+        <ol>
+          <li>Each player secretly chooses one selection card.</li>
+          <li>All players reveal their chosen cards at the same time.</li>
+          <li>Played cards stay face up on the table and cannot be played again while they remain there.</li>
+          <li>Resolve non-pause choices first.</li>
+          <li>Players who revealed pause wait until non-pause choices are visible before choosing a final target card from hand.</li>
+          <li>Pause choices are chosen, revealed, and resolved simultaneously.</li>
+          <li>A pause player may choose any target card in hand, including themself or another pause player. The pause card and target card both stay face up after the pause choice is revealed.</li>
+          <li>Players must choose each other to connect to each other.</li>
+          <li>If two players chose each other during a resolution step, they connect and may trade.</li>
+          <li>If exactly one player chose an exoplanet during a resolution step, that player connects to that exoplanet.</li>
+          <li>If two or more players chose the same exoplanet during a resolution step, none of those players connect to that exoplanet.</li>
+          <li>Only one player can connect to an exoplanet at a time.</li>
+          <li>If a player chose themself, that player connects to themself, produces internally, and returns all their face-up played cards to their hand.</li>
+          <li>A pause player may connect to an exoplanet blocked by non-pause players, but the original claimants remain failed.</li>
+          <li>If a non-pause player chose a player who revealed pause, that pause player may choose that non-pause player and connect to them.</li>
+          <li>If a player chose another player who did not choose them, that player fails to connect.</li>
+          <li>Any player who still failed to connect after pause choices gets a small action as compensation.</li>
         </ol>
       </section>
 
@@ -113,8 +139,9 @@
       <section>
         <h2>Known Gaps</h2>
         <ul>
-          <li>Core loop not locked.</li>
-          <li>Player interaction model not locked.</li>
+          <li>Small action compensation not defined.</li>
+          <li>Trade rules not defined.</li>
+          <li>Internal production rules not defined.</li>
           <li>Randomness source not locked.</li>
           <li>Economy and scoring not locked.</li>
           <li>Physical component limits not locked.</li>
