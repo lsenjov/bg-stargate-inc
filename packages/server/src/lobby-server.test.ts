@@ -6,6 +6,8 @@ import {
   type ClientToServerEvents,
   type CommandResult,
   type EmptyCommand,
+  type GestureCommand,
+  type GestureEvent,
   type LobbyView,
   type SelectionCommand,
   type ServerToClientEvents,
@@ -107,6 +109,13 @@ function selectionCommand(
   return new Promise((resolve) => socket.emit(event, command, resolve));
 }
 
+function gestureCommand(
+  socket: TestSocket,
+  command: GestureCommand,
+): Promise<CommandResult<GestureEvent>> {
+  return new Promise((resolve) => socket.emit("gesture:send", command, resolve));
+}
+
 function expectSuccess<T>(result: CommandResult<T>): T {
   expect(result.ok).toBe(true);
   if (!result.ok) {
@@ -137,6 +146,21 @@ function nextState(
       resolve(state);
     };
     socket.on("lobby:state", listener);
+  });
+}
+
+function nextGesture(socket: TestSocket): Promise<GestureEvent> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.off("gesture:received", listener);
+      reject(new Error("Timed out waiting for gesture"));
+    }, 2_000);
+    const listener = (event: GestureEvent) => {
+      clearTimeout(timeout);
+      socket.off("gesture:received", listener);
+      resolve(event);
+    };
+    socket.on("gesture:received", listener);
   });
 }
 
@@ -441,6 +465,199 @@ describe("secret game flow", () => {
     expect(resolved.lobby.game?.round.revealedPauseSelections?.[hostId]?.id).toBe(
       hostFollowup,
     );
+  });
+});
+
+describe("public gestures", () => {
+  it("validates authentication, payload shape, and player availability", async () => {
+    const anonymous = await connectClient();
+    const [host, second, third] = await createThreePlayerLobby();
+    const outsider = await createPlayer("Outsider");
+
+    expectFailure(
+      await gestureCommand(anonymous, {
+        target: { kind: "player", playerId: host.state.self.playerId },
+        gesture: "wave",
+      }),
+      "not-authenticated",
+    );
+    expectFailure(
+      await gestureCommand(host.socket, {
+        target: { kind: "player", playerId: host.state.self.playerId },
+        gesture: "nod",
+      }),
+      "gesture-target-unavailable",
+    );
+    expectFailure(
+      await gestureCommand(host.socket, {
+        target: { kind: "player", playerId: outsider.state.self.playerId },
+        gesture: "beckon",
+      }),
+      "gesture-target-unavailable",
+    );
+
+    const thirdDisconnected = nextState(
+      host.socket,
+      (state) =>
+        state.lobby.players[third.state.self.playerId]?.connected === false,
+    );
+    third.socket.disconnect();
+    await thirdDisconnected;
+    expectFailure(
+      await gestureCommand(second.socket, {
+        target: { kind: "player", playerId: third.state.self.playerId },
+        gesture: "applaud",
+      }),
+      "gesture-target-unavailable",
+    );
+
+    const rawSocket = host.socket as unknown as {
+      emit(event: string, ...args: unknown[]): void;
+    };
+    const malformed = (payload: unknown): Promise<CommandResult<GestureEvent>> =>
+      new Promise((resolve) => rawSocket.emit("gesture:send", payload, resolve));
+    expectFailure(await malformed(null), "invalid-input");
+    expectFailure(
+      await malformed({
+        target: { kind: "player", playerId: second.state.self.playerId },
+        gesture: "point",
+      }),
+      "invalid-input",
+    );
+    expectFailure(
+      await malformed({
+        target: { kind: "player", playerId: second.state.self.playerId },
+        gesture: "wave",
+        senderPlayerId: outsider.state.self.playerId,
+      }),
+      "invalid-input",
+    );
+  });
+
+  it("allows only current-game exoplanets after the game starts", async () => {
+    const [host] = await createThreePlayerLobby();
+    expectFailure(
+      await gestureCommand(host.socket, {
+        target: { kind: "exoplanet", exoplanetId: "alpha" },
+        gesture: "point",
+      }),
+      "game-not-started",
+    );
+
+    expectSuccess(await emptyCommand(host.socket, "game:start"));
+    expectFailure(
+      await gestureCommand(host.socket, {
+        target: { kind: "exoplanet", exoplanetId: "unknown" },
+        gesture: "shrug",
+      }),
+      "unknown-exoplanet",
+    );
+
+    const received = nextGesture(host.socket);
+    const accepted = expectSuccess(
+      await gestureCommand(host.socket, {
+        target: { kind: "exoplanet", exoplanetId: "alpha" },
+        gesture: "point",
+      }),
+    );
+    expect(await received).toEqual(accepted);
+    expect(accepted).toMatchObject({
+      senderPlayerId: host.state.self.playerId,
+      target: { kind: "exoplanet", exoplanetId: "alpha" },
+      gesture: "point",
+    });
+  });
+
+  it("broadcasts transient events only to connected lobby members", async () => {
+    const [host, second, third] = await createThreePlayerLobby();
+    const outsider = await createPlayer("Outsider");
+    const memberEvents = [host, second, third].map(({ socket }) =>
+      nextGesture(socket),
+    );
+    const outsiderEvents: GestureEvent[] = [];
+    const lobbyStates: LobbyView[] = [];
+    outsider.socket.on("gesture:received", (event) => outsiderEvents.push(event));
+    host.socket.on("lobby:state", (state) => lobbyStates.push(state));
+
+    const accepted = expectSuccess(
+      await gestureCommand(host.socket, {
+        target: { kind: "player", playerId: second.state.self.playerId },
+        gesture: "beckon",
+      }),
+    );
+    expect(await Promise.all(memberEvents)).toEqual([
+      accepted,
+      accepted,
+      accepted,
+    ]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(outsiderEvents).toEqual([]);
+    expect(lobbyStates).toEqual([]);
+    expect(accepted.senderPlayerId).toBe(host.state.self.playerId);
+    expect(accepted.id).toMatch(/^[A-Za-z0-9_-]{22}$/);
+  });
+
+  it("does not replay gestures when a player reconnects", async () => {
+    const [host, second, third] = await createThreePlayerLobby();
+    const secondDisconnected = nextState(
+      host.socket,
+      (state) =>
+        state.lobby.players[second.state.self.playerId]?.connected === false,
+    );
+    second.socket.disconnect();
+    await secondDisconnected;
+
+    expectSuccess(
+      await gestureCommand(host.socket, {
+        target: { kind: "player", playerId: third.state.self.playerId },
+        gesture: "wave",
+      }),
+    );
+    const replacement = await connectClient();
+    const replayed: GestureEvent[] = [];
+    replacement.on("gesture:received", (event) => replayed.push(event));
+    expectSuccess(
+      await reconnectLobby(replacement, {
+        lobbyId: second.state.lobby.id,
+        playerId: second.state.self.playerId,
+        reconnectToken: second.reconnectToken,
+      }),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(replayed).toEqual([]);
+  });
+
+  it("rate-limits by lobby and player across reconnections", async () => {
+    let currentTime = 1_000;
+    await restartServer({
+      gestureCooldownMs: 100,
+      now: () => currentTime,
+    });
+    const [host, second] = await createThreePlayerLobby();
+    const command = {
+      target: { kind: "player" as const, playerId: second.state.self.playerId },
+      gesture: "nod" as const,
+    };
+    expectSuccess(await gestureCommand(host.socket, command));
+    expectSuccess(
+      await gestureCommand(second.socket, {
+        target: { kind: "player", playerId: host.state.self.playerId },
+        gesture: "shake",
+      }),
+    );
+
+    const replacement = await connectClient();
+    expectSuccess(
+      await reconnectLobby(replacement, {
+        lobbyId: host.state.lobby.id,
+        playerId: host.state.self.playerId,
+        reconnectToken: host.reconnectToken,
+      }),
+    );
+    expectFailure(await gestureCommand(replacement, command), "rate-limited");
+
+    currentTime += 100;
+    expectSuccess(await gestureCommand(replacement, command));
   });
 });
 

@@ -6,6 +6,7 @@ import {
   createGame,
   createLobbySchema,
   emptyCommandSchema,
+  gestureCommandSchema,
   joinLobbySchema,
   reconnectLobbySchema,
   selectionCommandSchema,
@@ -17,6 +18,7 @@ import {
   type CommandCallback,
   type CommandErrorCode,
   type GameSetup,
+  type GestureEvent,
   type InterServerEvents,
   type LobbyState,
   type LobbyView,
@@ -65,6 +67,7 @@ export interface GameServerOptions {
   maxLobbyCreatesPerIp?: number;
   lobbyCreateWindowMs?: number;
   maxActiveLobbies?: number;
+  gestureCooldownMs?: number;
   now?: () => number;
 }
 
@@ -211,6 +214,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
   const connectionIpsBySocketId = new Map<string, string>();
   const lobbyCreatesByIp = new Map<string, number[]>();
   const lobbyCreateCleanupTimersByIp = new Map<string, NodeJS.Timeout>();
+  const lastGestureAtByPlayer = new Map<string, number>();
   const reconnectTokenGraceMs = options.reconnectTokenGraceMs ?? 5_000;
   const abandonedLobbyTtlMs = options.abandonedLobbyTtlMs ?? 30 * 60_000;
   const waitingLobbyTtlMs = options.waitingLobbyTtlMs ?? 2 * 60 * 60_000;
@@ -218,6 +222,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
   const maxLobbyCreatesPerIp = options.maxLobbyCreatesPerIp ?? 10;
   const lobbyCreateWindowMs = options.lobbyCreateWindowMs ?? 60_000;
   const maxActiveLobbies = options.maxActiveLobbies ?? 1_000;
+  const gestureCooldownMs = options.gestureCooldownMs ?? 2_000;
   const now = options.now ?? Date.now;
 
   const playerKey = (session: Session) =>
@@ -299,6 +304,7 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
     for (const playerId of Object.keys(lobby.players)) {
       const key = playerKey({ lobbyId: lobby.id, playerId });
       clearReconnectTokenGrace(key);
+      lastGestureAtByPlayer.delete(key);
       const socketId = socketIdsByPlayer.get(key);
       socketIdsByPlayer.delete(key);
       if (socketId) {
@@ -433,6 +439,16 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
       );
       const recipient = socketId ? io.sockets.sockets.get(socketId) : undefined;
       recipient?.emit("lobby:state", lobbyView(lobby, playerId));
+    }
+  };
+
+  const emitGesture = (lobby: LobbyState, event: GestureEvent): void => {
+    for (const playerId of Object.keys(lobby.players)) {
+      const socketId = socketIdsByPlayer.get(
+        playerKey({ lobbyId: lobby.id, playerId }),
+      );
+      const recipient = socketId ? io.sockets.sockets.get(socketId) : undefined;
+      recipient?.emit("gesture:received", event);
     }
   };
 
@@ -729,6 +745,96 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
         lobby.game = startNextRound(lobby.game);
         emitLobby(lobby);
         return lobbyView(lobby, session.playerId);
+      });
+    });
+
+    socket.on("gesture:send", (input, callback) => {
+      runCommand(callback, () => {
+        const parsed = gestureCommandSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CommandFailure("invalid-input", "Invalid gesture payload");
+        }
+        const session = requireSession(socket);
+        const lobby = getLobby(session.lobbyId);
+        const { target } = parsed.data;
+        if (target.kind === "player") {
+          if (target.playerId === session.playerId) {
+            throw new CommandFailure(
+              "gesture-target-unavailable",
+              "Players cannot gesture at themselves",
+            );
+          }
+          const targetPlayer = lobby.players[target.playerId];
+          if (!targetPlayer || !targetPlayer.connected) {
+            throw new CommandFailure(
+              "gesture-target-unavailable",
+              "The target player is unavailable",
+            );
+          }
+        } else {
+          if (!lobby.game) {
+            throw new CommandFailure(
+              "game-not-started",
+              "The game has not started",
+            );
+          }
+          if (
+            !lobby.game.exoplanets.some(
+              ({ id }) => id === target.exoplanetId,
+            )
+          ) {
+            throw new CommandFailure(
+              "unknown-exoplanet",
+              "The target exoplanet is not in this game",
+            );
+          }
+        }
+
+        const key = playerKey(session);
+        const sentAt = now();
+        const lastGestureAt = lastGestureAtByPlayer.get(key);
+        if (
+          lastGestureAt !== undefined &&
+          sentAt - lastGestureAt < gestureCooldownMs
+        ) {
+          throw new CommandFailure(
+            "rate-limited",
+            "Wait before sending another gesture",
+          );
+        }
+        lastGestureAtByPlayer.set(key, sentAt);
+
+        const baseEvent = {
+          id: randomId(),
+          senderPlayerId: session.playerId,
+          sentAt,
+        };
+        let event: GestureEvent;
+        if (target.kind === "player") {
+          if (parsed.data.gesture === "point") {
+            throw new CommandFailure("invalid-input", "Invalid player gesture");
+          }
+          event = {
+            ...baseEvent,
+            target,
+            gesture: parsed.data.gesture,
+          };
+        } else {
+          if (
+            parsed.data.gesture === "beckon" ||
+            parsed.data.gesture === "wave" ||
+            parsed.data.gesture === "applaud"
+          ) {
+            throw new CommandFailure("invalid-input", "Invalid exoplanet gesture");
+          }
+          event = {
+            ...baseEvent,
+            target,
+            gesture: parsed.data.gesture,
+          };
+        }
+        emitGesture(lobby, event);
+        return event;
       });
     });
 

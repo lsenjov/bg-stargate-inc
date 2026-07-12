@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type {
   CardId,
+  ExoplanetId,
   LobbyId,
   LobbyPlayer,
   PlayerId,
@@ -45,11 +46,72 @@ export const selectionCommandSchema = z.strictObject({
   cardId: z.string().min(1).max(256),
 });
 
+export const playerGestureKinds = [
+  "beckon",
+  "nod",
+  "shake",
+  "shrug",
+  "wave",
+  "applaud",
+] as const;
+
+export const exoplanetGestureKinds = [
+  "point",
+  "nod",
+  "shake",
+  "shrug",
+] as const;
+
+const playerGestureTargetSchema = z.strictObject({
+  kind: z.literal("player"),
+  playerId: opaqueIdSchema,
+});
+
+const exoplanetGestureTargetSchema = z.strictObject({
+  kind: z.literal("exoplanet"),
+  exoplanetId: z.string().min(1).max(256),
+});
+
+export const gestureCommandSchema = z.union([
+  z.strictObject({
+    target: playerGestureTargetSchema,
+    gesture: z.enum(playerGestureKinds),
+  }),
+  z.strictObject({
+    target: exoplanetGestureTargetSchema,
+    gesture: z.enum(exoplanetGestureKinds),
+  }),
+]);
+
 export type CreateLobbyCommand = z.input<typeof createLobbySchema>;
 export type JoinLobbyCommand = z.input<typeof joinLobbySchema>;
 export type ReconnectLobbyCommand = z.input<typeof reconnectLobbySchema>;
 export type EmptyCommand = z.input<typeof emptyCommandSchema>;
 export type SelectionCommand = z.input<typeof selectionCommandSchema>;
+export type PlayerGestureKind = (typeof playerGestureKinds)[number];
+export type ExoplanetGestureKind = (typeof exoplanetGestureKinds)[number];
+export type PlayerGestureTarget = {
+  kind: "player";
+  playerId: PlayerId;
+};
+export type ExoplanetGestureTarget = {
+  kind: "exoplanet";
+  exoplanetId: ExoplanetId;
+};
+export type GestureTarget = PlayerGestureTarget | ExoplanetGestureTarget;
+export type GestureCommand = z.input<typeof gestureCommandSchema>;
+
+interface GestureEventBase {
+  id: string;
+  senderPlayerId: PlayerId;
+  sentAt: number;
+}
+
+export type GestureEvent = GestureEventBase &
+  (
+    | { target: PlayerGestureTarget; gesture: PlayerGestureKind }
+    | { target: ExoplanetGestureTarget; gesture: ExoplanetGestureKind }
+  );
 
 export type CommandErrorCode =
   | "invalid-input"
@@ -68,6 +130,8 @@ export type CommandErrorCode =
   | "internal-error"
   | "invalid-setup"
   | "unknown-player"
+  | "unknown-exoplanet"
+  | "gesture-target-unavailable"
   | "wrong-phase"
   | "choice-already-submitted"
   | "card-unavailable"
@@ -142,11 +206,16 @@ export interface ClientToServerEvents {
     command: EmptyCommand,
     callback: CommandCallback<LobbyView>,
   ) => void;
+  "gesture:send": (
+    command: GestureCommand,
+    callback: CommandCallback<GestureEvent>,
+  ) => void;
 }
 
 export interface ServerToClientEvents {
   "lobby:state": (state: LobbyView) => void;
   "session:replaced": () => void;
+  "gesture:received": (event: GestureEvent) => void;
 }
 
 export type InterServerEvents = Record<never, never>;
