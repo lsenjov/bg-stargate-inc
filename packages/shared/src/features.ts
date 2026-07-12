@@ -38,6 +38,20 @@ export const gameFeatures = [
     rule: "Each player secretly chooses one available selection card before all choices are revealed.",
   },
   {
+    id: "selection-undo",
+    area: "connection-round",
+    name: "Selection undo",
+    status: "playable",
+    rule: "A player may withdraw their hidden locked choice while its initial or pause selection phase remains open, then choose again before the same deadline.",
+  },
+  {
+    id: "timed-auto-self-selection",
+    area: "connection-round",
+    name: "Timed automatic self-selection",
+    status: "playable",
+    rule: "Each initial and pause selection phase has a 30-second server deadline; when it expires, every eligible player without a locked choice automatically chooses themself.",
+  },
+  {
     id: "played-card-exhaustion",
     area: "connection-round",
     name: "Played cards stay face up",

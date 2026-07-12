@@ -27,6 +27,8 @@ describe("feature manifest", () => {
       "host-controlled-start",
       "public-gestures",
       "secret-simultaneous-selection",
+      "selection-undo",
+      "timed-auto-self-selection",
       "played-card-exhaustion",
       "pause-follow-up",
       "mutual-player-connection",
@@ -59,6 +61,20 @@ describe("feature manifest", () => {
     expect(gestures?.rule).toContain("fixed, public, non-binding");
     expect(gestures?.rule).toContain("other connected players");
     expect(gestures?.rule).toContain("current game's exoplanets");
+  });
+
+  it("states the playable selection undo and deadline rules", () => {
+    const undo = getFeature("selection-undo");
+    const deadline = getFeature("timed-auto-self-selection");
+
+    expect(undo?.status).toBe("playable");
+    expect(undo?.rule).toContain("hidden locked choice");
+    expect(undo?.rule).toContain("initial or pause selection phase remains open");
+    expect(undo?.rule).toContain("same deadline");
+    expect(deadline?.status).toBe("playable");
+    expect(deadline?.rule).toContain("30-second server deadline");
+    expect(deadline?.rule).toContain("without a locked choice");
+    expect(deadline?.rule).toContain("automatically chooses themself");
   });
 
   it("keeps undefined rewards visibly unresolved", () => {
