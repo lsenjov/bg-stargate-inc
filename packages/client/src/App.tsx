@@ -120,6 +120,25 @@ function commandError(result: CommandResult<unknown>): CommandError | null {
   return result.ok ? null : result.error;
 }
 
+function useSelectionCountdown(
+  deadlineAt: number | null,
+  phaseKey: string,
+): number | null {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (deadlineAt === null || deadlineAt <= Date.now()) return;
+    const interval = window.setInterval(() => {
+      setTick((tick) => tick + 1);
+      if (deadlineAt <= Date.now()) window.clearInterval(interval);
+    }, 250);
+    return () => window.clearInterval(interval);
+  }, [deadlineAt, phaseKey]);
+
+  if (deadlineAt === null) return null;
+  return Math.ceil(Math.max(0, deadlineAt - Date.now()) / 1_000);
+}
+
 export interface AppProps {
   socket?: GameSocket;
 }
@@ -360,11 +379,38 @@ function LobbyScreen({ socket, view, unavailable, pending, run, onError }: { soc
 
 function GameScreen({ socket, view, unavailable, pending, run, onError }: { socket: GameSocket; view: LobbyView; unavailable: boolean; pending: string | null; run: RunCommand; onError: (message: string | null) => void }) {
   const game = view.lobby.game;
+  const activeRound = game?.round;
+  const selectionOpen = activeRound?.phase === "initial-selection" || activeRound?.phase === "pause-selection";
+  const phaseKey = activeRound ? `${activeRound.number}:${activeRound.phase}` : "loading";
+  const remainingSeconds = useSelectionCountdown(
+    selectionOpen ? view.selectionDeadlineAt : null,
+    phaseKey,
+  );
+  const activeSelectionCardId = activeRound?.phase === "pause-selection"
+    ? view.self.pauseSelectionCardId
+    : activeRound?.phase === "initial-selection"
+      ? view.self.initialSelectionCardId
+      : null;
+  const mayActInPhase = activeRound?.phase === "initial-selection" ||
+    (activeRound?.phase === "pause-selection" && activeRound.pausePlayerIds.includes(view.self.playerId));
+  const previousSelection = useRef<{ phaseKey: string; cardId: string | null }>({ phaseKey, cardId: null });
+  const cardButtons = useRef(new Map<string, HTMLButtonElement>());
+  const handHeading = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    const previous = previousSelection.current;
+    if (previous.phaseKey === phaseKey && previous.cardId && !activeSelectionCardId && mayActInPhase) {
+      (cardButtons.current.get(previous.cardId) ?? handHeading.current)?.focus();
+    }
+    previousSelection.current = { phaseKey, cardId: activeSelectionCardId };
+  }, [activeSelectionCardId, mayActInPhase, phaseKey]);
+
   if (!game || !view.self.hand) return <main className="center-stage"><EmptyState title="Loading game" body="Waiting for the server to send your private hand." /></main>;
   const round = game.round;
   const selfSubmitted = round.phase === "initial-selection" ? Boolean(view.self.initialSelectionCardId) : round.phase === "pause-selection" ? Boolean(view.self.pauseSelectionCardId) : false;
   const isPausePlayer = round.pausePlayerIds.includes(view.self.playerId);
   const mayChoose = round.phase === "initial-selection" || (round.phase === "pause-selection" && isPausePlayer);
+  const deadlineExpired = remainingSeconds === 0;
   const eligibleCards = round.phase === "pause-selection" ? view.self.hand.filter(({ kind }) => kind !== "pause") : view.self.hand;
   const submittedCount = round.phase === "initial-selection" ? round.initialSelectionsSubmittedBy.length : round.pauseSelectionsSubmittedBy.length;
   const expectedCount = round.phase === "initial-selection" ? game.playerOrder.length : round.pausePlayerIds.length;
@@ -383,17 +429,22 @@ function GameScreen({ socket, view, unavailable, pending, run, onError }: { sock
   const phaseBody = round.phase === "initial-selection" ? "Your choice stays secret until everyone has locked in." : round.phase === "pause-selection" ? "Initial choices are revealed. Pause follow-ups remain secret until all pause players submit." : "Review the network outcome, then begin another round.";
 
   const submit = (card: SelectionCard) => {
+    if (deadlineExpired) return;
     if (round.phase === "pause-selection") {
       run("Locking selection", (callback) => socket.emit("selection:pause", { cardId: card.id }, callback));
     } else {
       run("Locking selection", (callback) => socket.emit("selection:initial", { cardId: card.id }, callback));
     }
   };
+  const undo = () => {
+    if (deadlineExpired) return;
+    run("Undoing selection", (callback) => socket.emit("selection:undo", {}, callback));
+  };
 
   return <main className="game-layout">
-    <section className="game-heading"><div><div className="eyebrow">ROUND {String(round.number).padStart(2, "0")} // {round.phase.replace("-", " ").toUpperCase()}</div><h1>{phaseTitle}</h1><p>{phaseBody}</p></div><div className="submission-meter" aria-label={meter.label}><strong>{meter.value}</strong><span>{meter.status}</span><div><i style={{ width: `${meter.progress}%` }} /></div></div></section>
+    <section className="game-heading"><div><div className="eyebrow">ROUND {String(round.number).padStart(2, "0")} // {round.phase.replace("-", " ").toUpperCase()}</div><h1>{phaseTitle}</h1><p>{phaseBody}</p></div><div className="round-status">{selectionOpen && <SelectionCountdown seconds={remainingSeconds} />}<div className="submission-meter" aria-label={meter.label}><strong>{meter.value}</strong><span>{meter.status}</span><div><i style={{ width: `${meter.progress}%` }} /></div></div></div></section>
     <CommsRing socket={socket} view={view} disabled={unavailable} onError={onError} />
-    {mayChoose && <section className="panel hand-panel" aria-labelledby="hand-title"><div className="section-title"><div><div className="eyebrow">PRIVATE // ONLY YOU CAN SEE THIS</div><h2 id="hand-title">Your hand</h2></div>{selfSubmitted && <span className="locked-label">✓ Selection locked</span>}</div>{eligibleCards.length ? <div className="card-grid">{eligibleCards.map((card) => <button className={`game-card ${card.kind} ${selfSubmitted && selectionCardId === card.id ? "selected" : ""}`} key={card.id} disabled={unavailable || selfSubmitted} onClick={() => submit(card)}><span className="card-type">{cardKindLabel(card)}</span><strong>{cardLabel(view, card)}</strong><small>{card.kind === "pause" ? "Reveal after the others" : card.kind === "player" && card.targetPlayerId === view.self.playerId ? "Return played cards to hand" : "Attempt connection"}</small><span className="card-action">{selfSubmitted && selectionCardId === card.id ? "Locked" : "Select"}</span></button>)}</div> : <EmptyState title="No target cards left" body="Your hand has no valid choice for this phase." />}</section>}
+    {mayChoose && <section className="panel hand-panel" aria-labelledby="hand-title"><div className="section-title"><div><div className="eyebrow">PRIVATE // ONLY YOU CAN SEE THIS</div><h2 id="hand-title" ref={handHeading} tabIndex={-1}>Your hand</h2></div>{selfSubmitted && <div className="selection-lock"><span className="locked-label">✓ Selection locked</span><button className="undo-selection" type="button" disabled={unavailable || deadlineExpired} onClick={undo}>{pending === "Undoing selection" ? "Undoing…" : "Undo selection"}</button></div>}</div>{deadlineExpired && <p className="deadline-message">Time is up. The server will connect any player without a locked choice to themself.</p>}{eligibleCards.length ? <div className="card-grid">{eligibleCards.map((card) => <button ref={(button) => { if (button) cardButtons.current.set(card.id, button); else cardButtons.current.delete(card.id); }} className={`game-card ${card.kind} ${selfSubmitted && selectionCardId === card.id ? "selected" : ""}`} key={card.id} disabled={unavailable || selfSubmitted || deadlineExpired} onClick={() => submit(card)}><span className="card-type">{cardKindLabel(card)}</span><strong>{cardLabel(view, card)}</strong><small>{card.kind === "pause" ? "Reveal after the others" : card.kind === "player" && card.targetPlayerId === view.self.playerId ? "Return played cards to hand" : "Attempt connection"}</small><span className="card-action">{selfSubmitted && selectionCardId === card.id ? "Locked" : "Select"}</span></button>)}</div> : <EmptyState title="No target cards left" body="Your hand has no valid choice for this phase." />}</section>}
     {!mayChoose && round.phase !== "resolved" && <section className="panel waiting-panel"><div className="orbit" aria-hidden="true"><i /></div><h2>{selfSubmitted || !isPausePlayer ? "Choice secured" : "Waiting for your turn"}</h2><p>Waiting for {Math.max(0, expectedCount - submittedCount)} {Math.max(0, expectedCount - submittedCount) === 1 ? "player" : "players"} to submit.</p></section>}
     {round.revealedInitialSelections && <RevealPanel title="Initial reveal" selections={round.revealedInitialSelections} view={view} />}
     {round.revealedPauseSelections && <RevealPanel title="Pause reveal" selections={round.revealedPauseSelections} view={view} />}
@@ -401,6 +452,24 @@ function GameScreen({ socket, view, unavailable, pending, run, onError }: { sock
     <PlayerStatePanel view={view} />
     {round.phase === "resolved" && <section className="next-round"><div><div className="eyebrow">KEEP THE NETWORK MOVING</div><h2>Ready for round {round.number + 1}?</h2></div><button className="primary-button light" disabled={unavailable} onClick={() => run("Starting next round", (callback) => socket.emit("round:next", {}, callback))}>{pending === "Starting next round" ? "Starting…" : "Next round"}<span aria-hidden="true">→</span></button></section>}
   </main>;
+}
+
+function SelectionCountdown({ seconds }: { seconds: number | null }) {
+  const display = seconds === null
+    ? "--:--"
+    : `0:${String(seconds).padStart(2, "0")}`;
+  const timerLabel = seconds === null
+    ? "Waiting for the selection deadline"
+    : seconds === 0
+      ? "Selection time expired"
+      : `${seconds} ${seconds === 1 ? "second" : "seconds"} remaining`;
+  const announcement = seconds === 30 || seconds === 10 || seconds === 5
+    ? `${seconds} seconds remain. Missing choices default to self.`
+    : seconds === 0
+      ? "Selection time expired. Missing choices default to self."
+      : "";
+
+  return <div className={`selection-countdown ${seconds === 0 ? "expired" : ""}`}><div className="eyebrow">SELECTION CLOSES IN</div><div className="countdown-value" role="timer" aria-label={timerLabel}><strong aria-hidden="true">{display}</strong><span aria-hidden="true">{seconds === 0 ? "TIME UP" : seconds === null ? "SYNCING" : "REMAINING"}</span></div><p>Missing choices default to self.</p><span className="live-region" role="status" aria-live="polite" aria-atomic="true">{announcement}</span></div>;
 }
 
 function RevealPanel({ title, selections, view }: { title: string; selections: Record<PlayerId, SelectionCard>; view: LobbyView }) {

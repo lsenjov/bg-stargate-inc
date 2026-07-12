@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,7 +119,7 @@ function gameView(phase: "initial-selection" | "pause-selection" | "resolved" = 
       },
     },
     self: { playerId: "p1", hand, initialSelectionCardId: null, pauseSelectionCardId: null },
-    selectionDeadlineAt: phase === "resolved" ? null : 30_000,
+    selectionDeadlineAt: phase === "resolved" ? null : Date.now() + 30_000,
   };
 }
 
@@ -137,6 +138,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -170,6 +172,158 @@ describe("player app", () => {
     const vegaCard = within(handPanel as HTMLElement).getByRole("button", { name: /Vega/i });
     fireEvent.click(vegaCard);
     expect(socket.commands).toContainEqual({ event: "selection:initial", payload: { cardId: "player:p1:p2" } });
+  });
+
+  it("counts down the initial selection deadline and stops local actions at zero", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const view = gameView();
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
+    render(<App socket={asSocket(socket)} />);
+
+    expect(screen.getByRole("timer", { name: "30 seconds remaining" }).textContent).toContain("0:30");
+    act(() => vi.advanceTimersByTime(20_000));
+    expect(screen.getByRole("timer", { name: "10 seconds remaining" }).textContent).toContain("0:10");
+    act(() => vi.advanceTimersByTime(10_000));
+
+    expect(screen.getByRole("timer", { name: "Selection time expired" }).textContent).toContain("0:00");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(screen.getByText(/server will connect any player without a locked choice to themself/i)).toBeTruthy();
+    const handPanel = screen.getByRole("heading", { name: "Your hand" }).closest("section")!;
+    const vegaCard = within(handPanel).getByRole("button", { name: /Vega/i }) as HTMLButtonElement;
+    expect(vegaCard.disabled).toBe(true);
+    fireEvent.click(vegaCard);
+    expect(socket.commands.some(({ event }) => event === "selection:initial")).toBe(false);
+  });
+
+  it("resynchronizes the timer when the phase or authoritative deadline changes", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(5_000);
+    const initial = gameView();
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(initial) });
+    render(<App socket={asSocket(socket)} />);
+
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(screen.getByRole("timer", { name: "28 seconds remaining" })).toBeTruthy();
+
+    const pause = gameView("pause-selection");
+    pause.lobby.game!.round.pausePlayerIds = ["p1"];
+    act(() => socket.serverEmit("lobby:state", pause));
+    expect(screen.getByRole("heading", { name: "Choose after the pause" })).toBeTruthy();
+    expect(screen.getByRole("timer", { name: "30 seconds remaining" })).toBeTruthy();
+
+    const corrected = structuredClone(pause);
+    corrected.selectionDeadlineAt = Date.now() + 12_000;
+    act(() => socket.serverEmit("lobby:state", corrected));
+    expect(screen.getByRole("timer", { name: "12 seconds remaining" })).toBeTruthy();
+  });
+
+  it("undoes a locked choice and allows another selection in the same phase", () => {
+    const submitted = gameView();
+    submitted.self.initialSelectionCardId = "player:p1:p2";
+    submitted.lobby.game!.round.initialSelectionsSubmittedBy = ["p1"];
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(submitted) });
+    socket.responses.set("selection:undo", { ok: true, data: submitted });
+    socket.responses.set("selection:initial", { ok: true, data: submitted });
+    render(<App socket={asSocket(socket)} />);
+
+    const undoButton = screen.getByRole("button", { name: "Undo selection" });
+    undoButton.focus();
+    fireEvent.click(undoButton);
+    expect(socket.commands).toContainEqual({ event: "selection:undo", payload: {} });
+
+    const undone = gameView();
+    undone.selectionDeadlineAt = submitted.selectionDeadlineAt;
+    act(() => socket.serverEmit("lobby:state", undone));
+    const handPanel = screen.getByRole("heading", { name: "Your hand" }).closest("section")!;
+    const alphaCard = within(handPanel).getByRole("button", { name: /Exoplanet Alpha/i });
+    expect(document.activeElement).toBe(within(handPanel).getByRole("button", { name: /Vega/i }));
+    expect((alphaCard as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(alphaCard);
+    expect(socket.commands).toContainEqual({ event: "selection:initial", payload: { cardId: "exoplanet:p1:alpha" } });
+  });
+
+  it("undoes and replaces a pause follow-up without offering the Pause card", () => {
+    const submitted = gameView("pause-selection");
+    submitted.lobby.game!.round.pausePlayerIds = ["p1"];
+    submitted.lobby.game!.round.pauseSelectionsSubmittedBy = ["p1"];
+    submitted.self.initialSelectionCardId = "pause:p1";
+    submitted.self.pauseSelectionCardId = "player:p1:p2";
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(submitted) });
+    socket.responses.set("selection:undo", { ok: true, data: submitted });
+    socket.responses.set("selection:pause", { ok: true, data: submitted });
+    render(<App socket={asSocket(socket)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo selection" }));
+    const undone = structuredClone(submitted);
+    undone.lobby.game!.round.pauseSelectionsSubmittedBy = [];
+    undone.self.pauseSelectionCardId = null;
+    act(() => socket.serverEmit("lobby:state", undone));
+
+    const handPanel = screen.getByRole("heading", { name: "Your hand" }).closest("section")!;
+    expect(within(handPanel).queryByRole("button", { name: /Pause/i })).toBeNull();
+    fireEvent.click(within(handPanel).getByRole("button", { name: /Vega/i }));
+    expect(socket.commands).toContainEqual({ event: "selection:pause", payload: { cardId: "player:p1:p2" } });
+  });
+
+  it("keeps a locked choice and reports an undo rejection", () => {
+    const submitted = gameView("pause-selection");
+    submitted.lobby.game!.round.pausePlayerIds = ["p1"];
+    submitted.lobby.game!.round.pauseSelectionsSubmittedBy = ["p1"];
+    submitted.self.pauseSelectionCardId = "player:p1:p2";
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(submitted) });
+    socket.responses.set("selection:undo", { ok: false, error: { code: "wrong-phase", message: "Selection is already revealed" } });
+    render(<App socket={asSocket(socket)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo selection" }));
+    expect(screen.getByRole("alert").textContent).toContain("Selection is already revealed");
+    expect(screen.getByText("✓ Selection locked")).toBeTruthy();
+  });
+
+  it("disables undo while pending and while offline", () => {
+    const submitted = gameView();
+    submitted.self.initialSelectionCardId = "player:p1:p2";
+    submitted.lobby.game!.round.initialSelectionsSubmittedBy = ["p1"];
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(submitted) });
+    render(<App socket={asSocket(socket)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo selection" }));
+    expect((screen.getByRole("button", { name: "Undoing…" }) as HTMLButtonElement).disabled).toBe(true);
+
+    act(() => socket.callbacks.get("selection:undo")?.({ ok: true, data: submitted }));
+    socket.connected = false;
+    act(() => socket.serverEmit("disconnect"));
+    expect((screen.getByRole("button", { name: "Undo selection" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("cleans the countdown interval during StrictMode replay and unmount", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    const view = gameView();
+    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
+
+    const rendered = render(<StrictMode><App socket={asSocket(socket)} /></StrictMode>);
+    expect(screen.getByRole("timer", { name: "30 seconds remaining" })).toBeTruthy();
+    expect(setIntervalSpy).toHaveBeenCalledTimes(2);
+    rendered.unmount();
+    const intervalHandles = setIntervalSpy.mock.results.map(({ value }) => value);
+    expect(clearIntervalSpy.mock.calls.map(([handle]) => handle)).toEqual(intervalHandles);
   });
 
   it("shows resolved results, unresolved reward scope, and starts the next round", async () => {
