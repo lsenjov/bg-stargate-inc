@@ -10,7 +10,7 @@
     <header>
       <div class="header-inner">
         <h1>Current Rules</h1>
-        <p class="meta">Status: draft. Last updated: 2026-07-13.</p>
+        <p class="meta">Status: draft. Last updated: 2026-07-15.</p>
       </div>
     </header>
     <main>
@@ -45,6 +45,8 @@
           <li>Board or map: unresolved.</li>
           <li>Stargate pieces: unresolved.</li>
           <li>Currency or resource tokens: unresolved.</li>
+          <li>Module cards: each exoplanet has its own face-down deck and discard pile; the exact deck lists are unresolved.</li>
+          <li>Factory slots: each exoplanet begins with three; home planets have no slot limit.</li>
           <li>Player aids: unresolved.</li>
         </ul>
       </section>
@@ -55,11 +57,130 @@
           <li>Place the board or map.</li>
           <li>Place 2-4 exoplanets in the middle.</li>
           <li>Give each player their selection cards.</li>
-          <li>Give each player their starting pieces and resources.</li>
-          <li>Prepare card decks, markets, or public objectives.</li>
+          <li>Give each player one of each starting module: Solar Farm, Farm, Mine, Smelter, MRE Factory, and Training Center.</li>
+          <li>Each player arranges those modules into factories on their home planet. A home planet has any number of factory slots, but every module in one factory must have the same type.</li>
+          <li>Give each exoplanet three empty factory slots.</li>
+          <li>Shuffle each exoplanet's module deck and place it face down with space for its discard pile.</li>
+          <li>Give each player their other starting pieces and resources.</li>
+          <li>Prepare other card decks, markets, or public objectives.</li>
           <li>Choose a first player.</li>
         </ol>
         <p>Exact setup unresolved.</p>
+      </section>
+
+      <section>
+        <h2>Modules and Factories</h2>
+        <h3>Modules</h3>
+        <p>Every module has a name, owner, type, construction cost, running cost, optional inputs, and outputs. A module gains its owner when it is installed in a factory at a home planet or exoplanet.</p>
+        <h3>Factory Slots and Factories</h3>
+        <ul>
+          <li>A home planet has any number of factory slots.</li>
+          <li>Each exoplanet begins with three empty factory slots.</li>
+          <li>Installing a module into an empty slot forms a factory.</li>
+          <li>A factory contains one or more modules, and all modules in it must have the same type.</li>
+          <li>Any number of modules of that type may stack in the factory.</li>
+          <li>Modules retain their installation order from oldest to newest.</li>
+        </ul>
+        <p>The source rule also calls exoplanet factory slots “empty factories,” although a factory is otherwise defined as having one or more modules. Whether an empty slot is mechanically a factory remains unresolved.</p>
+        <h3>Running a Factory</h3>
+        <ul>
+          <li>A player may run factories when they connect to themself or to an exoplanet.</li>
+          <li>To run a factory, begin with its oldest installed module.</li>
+          <li>After running that module, the player chooses either to stop that factory or run the next-oldest module.</li>
+          <li>Repeat until the player stops or every installed module has run.</li>
+          <li>A player cannot skip an older module to run a newer module in the same factory.</li>
+          <li>There is no stated limit on how many installed modules in one factory may run.</li>
+        </ul>
+        <p>Factory run costs escalate separately in the order that factories run during that connection. The first factory costs its regular amount, the second costs twice its regular amount, the third costs three times its regular amount, and so on. Earlier factories keep their own multipliers: running a third factory does not change the first factory from 1× or the second from 2×.</p>
+        <p>It is unresolved whether “cost” in this multiplier means only the dollar running cost, or both the running cost and module inputs. It is also unresolved who chooses factory order, whether outputs from one module or factory are immediately available as inputs later in the same connection, whether modules with different owners may share an exoplanet factory, and which modules a connected player may run or benefit from.</p>
+      </section>
+
+      <section>
+        <h2>Starting Modules</h2>
+        <p>Each player starts with one copy of every module in this table and may arrange them into home-planet factories however they wish, subject to the one-type-per-factory rule.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Construction Cost</th>
+              <th>Running Cost</th>
+              <th>Inputs</th>
+              <th>Outputs</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Solar Farm</td>
+              <td>Rural</td>
+              <td>1 Metal</td>
+              <td>$1</td>
+              <td>None</td>
+              <td>3 Energy</td>
+            </tr>
+            <tr>
+              <td>Farm</td>
+              <td>Rural</td>
+              <td>1 Metal, 2 Energy</td>
+              <td>$1</td>
+              <td>1 Energy</td>
+              <td>1 Food</td>
+            </tr>
+            <tr>
+              <td>Mine</td>
+              <td>Underground</td>
+              <td>1 Food, 2 Energy</td>
+              <td>$1</td>
+              <td>1 Energy</td>
+              <td>1 Ore</td>
+            </tr>
+            <tr>
+              <td>Smelter</td>
+              <td>Industrial</td>
+              <td>2 Metal</td>
+              <td>$1</td>
+              <td>1 Energy, 1 Ore</td>
+              <td>1 Metal</td>
+            </tr>
+            <tr>
+              <td>MRE Factory</td>
+              <td>Industrial</td>
+              <td>2 Metal</td>
+              <td>$1</td>
+              <td>1 Energy, 1 Food</td>
+              <td>1 MRE</td>
+            </tr>
+            <tr>
+              <td>Training Center</td>
+              <td>Underground</td>
+              <td>2 MRE, 2 Metal, 2 Energy</td>
+              <td>$2</td>
+              <td>1 Energy, 1 MRE, 1 Metal</td>
+              <td>1 Team</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Acquiring Exoplanet Modules</h2>
+        <p>Each exoplanet has its own face-down module deck and discard pile. When a player connects to an exoplanet, they may use one of these methods:</p>
+        <ul>
+          <li>Spend one or more Teams. Draw a number of modules equal to one plus the number of Teams spent, keep one, and put the rest in the discard pile.</li>
+          <li>Instead of drawing from the deck, spend one Team to look through the discards and keep one module.</li>
+        </ul>
+        <p>A player may gain no more than one module this way per turn, regardless of which method they use. The rules describe this limit as “draw one module per turn”; the deck method's larger reveal is not intended to let the player keep more than one.</p>
+      </section>
+
+      <section>
+        <h2>Constructing Modules</h2>
+        <ul>
+          <li>When a player connects to themself or an exoplanet, they may pay a drawn module's construction cost to install it into a factory at that location.</li>
+          <li>The installed module must match the factory's type. A module installed into an empty factory slot establishes that factory's type.</li>
+          <li>Mark the installed module as belonging to the player who constructed it.</li>
+          <li>Constructing on an exoplanet costs one additional Team on top of the module's regular construction cost.</li>
+        </ul>
+        <p>It is unresolved whether a module taken from a discard pile counts as a “drawn module,” whether a kept module must be built immediately or can be held, and whether a player may construct a module acquired on an earlier turn.</p>
       </section>
 
       <section>
@@ -146,7 +267,9 @@
         <ul>
           <li>Small action compensation not defined.</li>
           <li>Trade rules not defined.</li>
-          <li>Internal production rules not defined.</li>
+          <li>Production timing and the scope of factory cost multipliers are not defined.</li>
+          <li>Module hand, storage, and construction timing are not defined.</li>
+          <li>Exoplanet module deck contents are not defined.</li>
           <li>Randomness source not locked.</li>
           <li>Economy and scoring not locked.</li>
           <li>Physical component limits not locked.</li>
