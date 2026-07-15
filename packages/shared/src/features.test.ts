@@ -130,7 +130,16 @@ describe("feature manifest", () => {
     const acquisition = getFeature("module-acquisition");
 
     expect(acquisition?.rule).toContain(
-      "reveal one more module than Teams spent",
+      "Each exoplanet has its own face-down module deck",
+    );
+    expect(acquisition?.rule).toContain("its own discard pile");
+    expect(acquisition?.rule).toContain(
+      "one more module than Teams spent",
+    );
+    expect(acquisition?.rule).toContain("from that deck");
+    expect(acquisition?.rule).toContain("put the rest in its discard pile");
+    expect(acquisition?.rule).toContain(
+      "from that exoplanet's discard pile",
     );
     expect(acquisition?.rule).toContain("spend one Team to choose one");
     expect(acquisition?.rule).toContain("At most one module");

@@ -133,7 +133,7 @@ export const gameFeatures = [
     area: "rewards",
     name: "Exoplanet module acquisition",
     status: "planned",
-    rule: "On an exoplanet connection, spend one or more Teams to reveal one more module than Teams spent, keep one, and discard the rest; instead, spend one Team to choose one from that exoplanet's discards. At most one module may be kept this way per turn.",
+    rule: "Each exoplanet has its own face-down module deck and its own discard pile. On an exoplanet connection, spend one or more Teams to reveal from that deck one more module than Teams spent, keep one, and put the rest in its discard pile; instead, spend one Team to choose one module from that exoplanet's discard pile. At most one module may be kept this way per turn.",
   },
   {
     id: "module-construction",
