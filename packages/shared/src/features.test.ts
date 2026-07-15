@@ -91,6 +91,8 @@ describe("feature manifest", () => {
   it("marks factory and module rules as planned rather than playable", () => {
     const plannedFeatureIds = [
       "internal-production-reward",
+      "module-schema",
+      "starting-module-setup",
       "module-acquisition",
       "module-construction",
     ] as const;
@@ -99,6 +101,15 @@ describe("feature manifest", () => {
       expect(getFeature(id)?.status).toBe("planned");
       expect(playableFeatureIds).not.toContain(id);
     }
+  });
+
+  it("states the module schema and exact starting setup", () => {
+    expect(getFeature("module-schema")?.rule).toBe(
+      "Every module has a name, type, construction cost, running cost, optional inputs, and outputs. Installation sets its owner.",
+    );
+    expect(getFeature("starting-module-setup")?.rule).toBe(
+      "At setup, each player installs and owns one of each module, arranged among any number of same-type home-planet factories: Solar Farm — Rural; construction 1 Metal; running $1; no inputs; output 3 Energy. Farm — Rural; construction 1 Metal and 2 Energy; running $1; input 1 Energy; output 1 Food. Mine — Underground; construction 1 Food and 2 Energy; running $1; input 1 Energy; output 1 Ore. Smelter — Industrial; construction 2 Metal; running $1; inputs 1 Energy and 1 Ore; output 1 Metal. MRE Factory — Industrial; construction 2 Metal; running $1; inputs 1 Energy and 1 Food; output 1 MRE. Training Center — Underground; construction 2 MRE, 2 Metal, and 2 Energy; running $2; inputs 1 Energy, 1 MRE, and 1 Metal; output 1 Team.",
+    );
   });
 
   it("states factory production order and cost scaling", () => {
@@ -131,7 +142,10 @@ describe("feature manifest", () => {
 
     expect(construction?.rule).toContain("construction cost");
     expect(construction?.rule).toContain("at that location");
-    expect(construction?.rule).toContain("matching the factory's module type");
+    expect(construction?.rule).toContain("match an established factory type");
+    expect(construction?.rule).toContain(
+      "first module installed in an empty factory slot establishes that type",
+    );
     expect(construction?.rule).toContain("mark its owner");
     expect(construction?.rule).toContain("also costs one Team");
   });

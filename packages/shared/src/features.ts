@@ -115,6 +115,20 @@ export const gameFeatures = [
     rule: "Home planets have unlimited factory slots and exoplanets begin with three. A factory stacks any number of modules of one type in installation order. On a self- or exoplanet connection, each factory runs oldest-first until the player stops; successive factories cost 1x, 2x, 3x, and so on without changing earlier factories' multipliers.",
   },
   {
+    id: "module-schema",
+    area: "rewards",
+    name: "Module card schema",
+    status: "planned",
+    rule: "Every module has a name, type, construction cost, running cost, optional inputs, and outputs. Installation sets its owner.",
+  },
+  {
+    id: "starting-module-setup",
+    area: "rewards",
+    name: "Starting module setup",
+    status: "planned",
+    rule: "At setup, each player installs and owns one of each module, arranged among any number of same-type home-planet factories: Solar Farm — Rural; construction 1 Metal; running $1; no inputs; output 3 Energy. Farm — Rural; construction 1 Metal and 2 Energy; running $1; input 1 Energy; output 1 Food. Mine — Underground; construction 1 Food and 2 Energy; running $1; input 1 Energy; output 1 Ore. Smelter — Industrial; construction 2 Metal; running $1; inputs 1 Energy and 1 Ore; output 1 Metal. MRE Factory — Industrial; construction 2 Metal; running $1; inputs 1 Energy and 1 Food; output 1 MRE. Training Center — Underground; construction 2 MRE, 2 Metal, and 2 Energy; running $2; inputs 1 Energy, 1 MRE, and 1 Metal; output 1 Team.",
+  },
+  {
     id: "module-acquisition",
     area: "rewards",
     name: "Exoplanet module acquisition",
@@ -126,7 +140,7 @@ export const gameFeatures = [
     area: "rewards",
     name: "Module construction and ownership",
     status: "planned",
-    rule: "On a self- or exoplanet connection, pay a drawn module's construction cost to install it in a factory at that location, matching the factory's module type, and mark its owner. Exoplanet construction also costs one Team.",
+    rule: "On a self- or exoplanet connection, pay a drawn module's construction cost to install it in a factory at that location and mark its owner. It must match an established factory type; the first module installed in an empty factory slot establishes that type. Exoplanet construction also costs one Team.",
   },
   {
     id: "failed-connection-compensation",

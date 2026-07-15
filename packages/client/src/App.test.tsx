@@ -336,6 +336,9 @@ describe("player app", () => {
     expect(await screen.findByText("Connection report")).toBeTruthy();
     expect(screen.getByLabelText("Round resolved").textContent).toContain("DONE");
     expect(screen.getByText("Reward step not yet playable")).toBeTruthy();
+    expect(screen.getByText(
+      "The connection result is final. Module and factory production rules are planned but not yet playable. Trade and failed-connection compensation remain unresolved.",
+    )).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /next round/i }));
     expect(socket.commands.some(({ event }) => event === "round:next")).toBe(true);
   });

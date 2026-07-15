@@ -39,7 +39,7 @@ Environment variables are documented in [`.env.example`](.env.example). They are
 - Played-card exhaustion and self-connection card reset.
 - Advance through repeated connection-selection rounds.
 
-Trade rewards, internal-production rewards, failed-connection compensation, economy, scoring, the board, the wider turn loop, and the end game are unresolved. The app displays these limits rather than inventing rules.
+Module and factory production rules are documented and planned, but are not implemented in the app. Trade rewards, failed-connection compensation, economy, scoring, the board, the wider turn loop, and the end game remain unresolved. The app displays these limits rather than inventing rules.
 
 ## Persistence and service limits
 
