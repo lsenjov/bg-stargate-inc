@@ -79,10 +79,61 @@ describe("feature manifest", () => {
 
   it("keeps undefined rewards visibly unresolved", () => {
     expect(getFeature("trade-reward")?.status).toBe("unresolved");
-    expect(getFeature("internal-production-reward")?.status).toBe("unresolved");
     expect(getFeature("failed-connection-compensation")?.status).toBe(
       "unresolved",
     );
+    expect(getFeature("economy-and-scoring")?.status).toBe("unresolved");
+    expect(getFeature("economy-and-scoring")?.rule).toContain(
+      "scoring, and the game objective",
+    );
+  });
+
+  it("marks factory and module rules as planned rather than playable", () => {
+    const plannedFeatureIds = [
+      "internal-production-reward",
+      "module-acquisition",
+      "module-construction",
+    ] as const;
+
+    for (const id of plannedFeatureIds) {
+      expect(getFeature(id)?.status).toBe("planned");
+      expect(playableFeatureIds).not.toContain(id);
+    }
+  });
+
+  it("states factory production order and cost scaling", () => {
+    const production = getFeature("internal-production-reward");
+
+    expect(production?.rule).toContain("unlimited factory slots");
+    expect(production?.rule).toContain("exoplanets begin with three");
+    expect(production?.rule).toContain("any number of modules of one type");
+    expect(production?.rule).toContain("self- or exoplanet connection");
+    expect(production?.rule).toContain("oldest-first until the player stops");
+    expect(production?.rule).toContain("1x, 2x, 3x");
+    expect(production?.rule).toContain(
+      "without changing earlier factories' multipliers",
+    );
+  });
+
+  it("states module acquisition limits", () => {
+    const acquisition = getFeature("module-acquisition");
+
+    expect(acquisition?.rule).toContain(
+      "reveal one more module than Teams spent",
+    );
+    expect(acquisition?.rule).toContain("spend one Team to choose one");
+    expect(acquisition?.rule).toContain("At most one module");
+    expect(acquisition?.rule).toContain("per turn");
+  });
+
+  it("states module construction, type, ownership, and location costs", () => {
+    const construction = getFeature("module-construction");
+
+    expect(construction?.rule).toContain("construction cost");
+    expect(construction?.rule).toContain("at that location");
+    expect(construction?.rule).toContain("matching the factory's module type");
+    expect(construction?.rule).toContain("mark its owner");
+    expect(construction?.rule).toContain("also costs one Team");
   });
 
   it("derives every area and scope statement from the supplied manifest", () => {

@@ -110,9 +110,23 @@ export const gameFeatures = [
   {
     id: "internal-production-reward",
     area: "rewards",
-    name: "Internal production reward",
-    status: "unresolved",
-    rule: "A self-connection produces internally, but its reward is not defined.",
+    name: "Factory production",
+    status: "planned",
+    rule: "Home planets have unlimited factory slots and exoplanets begin with three. A factory stacks any number of modules of one type in installation order. On a self- or exoplanet connection, each factory runs oldest-first until the player stops; successive factories cost 1x, 2x, 3x, and so on without changing earlier factories' multipliers.",
+  },
+  {
+    id: "module-acquisition",
+    area: "rewards",
+    name: "Exoplanet module acquisition",
+    status: "planned",
+    rule: "On an exoplanet connection, spend one or more Teams to reveal one more module than Teams spent, keep one, and discard the rest; instead, spend one Team to choose one from that exoplanet's discards. At most one module may be kept this way per turn.",
+  },
+  {
+    id: "module-construction",
+    area: "rewards",
+    name: "Module construction and ownership",
+    status: "planned",
+    rule: "On a self- or exoplanet connection, pay a drawn module's construction cost to install it in a factory at that location, matching the factory's module type, and mark its owner. Exoplanet construction also costs one Team.",
   },
   {
     id: "failed-connection-compensation",
@@ -126,7 +140,7 @@ export const gameFeatures = [
     area: "full-game",
     name: "Economy and scoring",
     status: "unresolved",
-    rule: "Resources, contracts, scoring, and the game objective are not yet defined.",
+    rule: "Contracts, scoring, and the game objective are not yet defined.",
   },
   {
     id: "board-and-end-game",
