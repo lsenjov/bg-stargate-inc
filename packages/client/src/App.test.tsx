@@ -6,7 +6,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createStartingModules,
   gameFeatures,
+  startingResources,
   type CommandResult,
   type LobbyView,
   type SessionData,
@@ -14,6 +16,7 @@ import {
 
 import { App } from "./App.js";
 import type { GameSocket } from "./socket.js";
+import "./testStorage.js";
 
 type Listener = (...args: never[]) => void;
 
@@ -62,6 +65,27 @@ const lobbyPlayers = {
   p3: { id: "p3", name: "Orion", connected: true },
 };
 
+function publicGamePlayer(player: (typeof lobbyPlayers)[keyof typeof lobbyPlayers]) {
+  return {
+    ...player,
+    handSize: 4,
+    playedCards: [],
+    resources: { ...startingResources },
+    heldModules: createStartingModules(player.id),
+    homeFactories: [],
+  };
+}
+
+function exoplanet(id: string, name: string) {
+  return {
+    id,
+    name,
+    factorySlots: [null, null, null],
+    moduleDeck: [],
+    moduleDiscard: [],
+  };
+}
+
 function waitingView(): LobbyView {
   return {
     lobby: {
@@ -105,11 +129,11 @@ function gameView(phase: "initial-selection" | "pause-selection" | "resolved" = 
     lobby: {
       id: "lobby-one", joinCode: "ABCDEFGHJK", hostPlayerId: "p1", status: "playing", players: lobbyPlayers,
       game: {
-        id: "game-one", playerOrder: playerIds, exoplanets: [{ id: "alpha", name: "Exoplanet Alpha" }, { id: "beta", name: "Exoplanet Beta" }],
+        id: "game-one", phase: "connection-round", connectionRewards: {}, playerOrder: playerIds, exoplanets: [exoplanet("alpha", "Exoplanet Alpha"), exoplanet("beta", "Exoplanet Beta")],
         players: {
-          p1: { ...lobbyPlayers.p1, handSize: hand.length, playedCards: [] },
-          p2: { ...lobbyPlayers.p2, handSize: 4, playedCards: [] },
-          p3: { ...lobbyPlayers.p3, handSize: 4, playedCards: [] },
+          p1: { ...publicGamePlayer(lobbyPlayers.p1), handSize: hand.length },
+          p2: publicGamePlayer(lobbyPlayers.p2),
+          p3: publicGamePlayer(lobbyPlayers.p3),
         },
         round: {
           number: 1, phase, initialSelectionsSubmittedBy: phase === "initial-selection" ? [] : playerIds,
@@ -123,6 +147,49 @@ function gameView(phase: "initial-selection" | "pause-selection" | "resolved" = 
   };
 }
 
+function factoryRewardView(stage: "construction" | "production"): LobbyView {
+  const view = gameView("resolved");
+  const game = view.lobby.game!;
+  game.phase = "connection-rewards";
+  game.connectionRewards = {
+    p1: {
+      location: { kind: "home", playerId: "p1" },
+      stage,
+      completedFactoryIds: [],
+      activeFactory: null,
+    },
+  };
+  if (stage === "production") {
+    const solar = game.players.p1!.heldModules.find(
+      ({ definitionId }) => definitionId === "solar-farm",
+    )!;
+    const farm = game.players.p1!.heldModules.find(
+      ({ definitionId }) => definitionId === "farm",
+    )!;
+    game.players.p1!.heldModules = game.players.p1!.heldModules.filter(
+      ({ id }) => id !== solar.id && id !== farm.id,
+    );
+    game.players.p1!.resources = {
+      ...game.players.p1!.resources,
+      energy: 4,
+      metal: 6,
+    };
+    game.players.p1!.homeFactories = [
+      {
+        id: "factory:home:p1:0",
+        type: "rural",
+        modules: [{ ...solar, ownerId: "p1" }],
+      },
+      {
+        id: "factory:home:p1:1",
+        type: "rural",
+        modules: [{ ...farm, ownerId: "p1" }],
+      },
+    ];
+  }
+  return view;
+}
+
 function sessionData(state: LobbyView, reconnectToken = "token"): SessionData {
   return { state, reconnectToken };
 }
@@ -132,7 +199,7 @@ function asSocket(fake: FakeSocket): GameSocket {
 }
 
 beforeEach(() => {
-  localStorage.clear();
+  window.localStorage.clear();
   window.history.replaceState({}, "", "/");
 });
 
@@ -154,13 +221,13 @@ describe("player app", () => {
     await user.click(screen.getByRole("button", { name: /create lobby/i }));
 
     expect(await screen.findByText("ABCDEFGHJK")).toBeTruthy();
-    expect(JSON.parse(localStorage.getItem("stargate-inc-session-v1") ?? "{}")).toMatchObject({ lobbyId: "lobby-one", playerId: "p1" });
+    expect(JSON.parse(window.localStorage.getItem("stargate-inc-session-v1") ?? "{}")).toMatchObject({ lobbyId: "lobby-one", playerId: "p1" });
     await user.click(screen.getByRole("button", { name: /start game · 3 players/i }));
     expect(socket.commands.some(({ event }) => event === "game:start")).toBe(true);
   });
 
   it("reconnects to a private hand and submits a secret selection", async () => {
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(gameView()) });
     socket.responses.set("selection:initial", { ok: true, data: gameView() });
@@ -178,7 +245,7 @@ describe("player app", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const view = gameView();
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
     render(<App socket={asSocket(socket)} />);
@@ -202,7 +269,7 @@ describe("player app", () => {
     vi.useFakeTimers();
     vi.setSystemTime(5_000);
     const initial = gameView();
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(initial) });
     render(<App socket={asSocket(socket)} />);
@@ -226,7 +293,7 @@ describe("player app", () => {
     const submitted = gameView();
     submitted.self.initialSelectionCardId = "player:p1:p2";
     submitted.lobby.game!.round.initialSelectionsSubmittedBy = ["p1"];
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(submitted) });
     socket.responses.set("selection:undo", { ok: true, data: submitted });
@@ -255,7 +322,7 @@ describe("player app", () => {
     submitted.lobby.game!.round.pauseSelectionsSubmittedBy = ["p1"];
     submitted.self.initialSelectionCardId = "pause:p1";
     submitted.self.pauseSelectionCardId = "player:p1:p2";
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(submitted) });
     socket.responses.set("selection:undo", { ok: true, data: submitted });
@@ -279,7 +346,7 @@ describe("player app", () => {
     submitted.lobby.game!.round.pausePlayerIds = ["p1"];
     submitted.lobby.game!.round.pauseSelectionsSubmittedBy = ["p1"];
     submitted.self.pauseSelectionCardId = "player:p1:p2";
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(submitted) });
     socket.responses.set("selection:undo", { ok: false, error: { code: "wrong-phase", message: "Selection is already revealed" } });
@@ -294,7 +361,7 @@ describe("player app", () => {
     const submitted = gameView();
     submitted.self.initialSelectionCardId = "player:p1:p2";
     submitted.lobby.game!.round.initialSelectionsSubmittedBy = ["p1"];
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(submitted) });
     render(<App socket={asSocket(socket)} />);
@@ -314,7 +381,7 @@ describe("player app", () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     const clearIntervalSpy = vi.spyOn(window, "clearInterval");
     const view = gameView();
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
 
@@ -327,7 +394,7 @@ describe("player app", () => {
   });
 
   it("shows resolved results, unresolved reward scope, and starts the next round", async () => {
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(gameView("resolved")) });
     socket.responses.set("round:next", { ok: true, data: gameView() });
@@ -335,12 +402,58 @@ describe("player app", () => {
 
     expect(await screen.findByText("Connection report")).toBeTruthy();
     expect(screen.getByLabelText("Round resolved").textContent).toContain("DONE");
-    expect(screen.getByText("Reward step not yet playable")).toBeTruthy();
+    expect(screen.getByText("Some rewards remain unresolved")).toBeTruthy();
     expect(screen.getByText(
-      "The connection result is final. Module and factory production rules are planned but not yet playable. Trade and failed-connection compensation remain unresolved.",
+      "Factory actions are playable after self and exoplanet connections. Trade and failed-connection compensation are not yet defined.",
     )).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /next round/i }));
     expect(socket.commands.some(({ event }) => event === "round:next")).toBe(true);
+  });
+
+  it("constructs held modules into a chosen factory target", async () => {
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const view = factoryRewardView("construction");
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
+    socket.responses.set("factory:construct", { ok: true, data: view });
+    socket.responses.set("production:begin", { ok: true, data: view });
+    render(<App socket={asSocket(socket)} />);
+
+    expect(await screen.findByRole("heading", { name: "Build at your home planet" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /next round/i })).toBeNull();
+    expect((screen.getByLabelText("Factory target for Solar Farm") as HTMLSelectElement).value).toBe("new-factory");
+    fireEvent.click(screen.getByRole("button", { name: "Construct Solar Farm" }));
+    expect(socket.commands).toContainEqual({
+      event: "factory:construct",
+      payload: {
+        moduleId: "module:p1:solar-farm",
+        target: { kind: "new-factory" },
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /continue to production/i }));
+    expect(socket.commands.some(({ event }) => event === "production:begin")).toBe(true);
+  });
+
+  it("lets the player choose the next factory multiplier and finish production", async () => {
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const view = factoryRewardView("production");
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
+    socket.responses.set("production:run", { ok: true, data: view });
+    socket.responses.set("connection:finish", { ok: true, data: view });
+    render(<App socket={asSocket(socket)} />);
+
+    expect(await screen.findByRole("heading", { name: "Operate your home planet" })).toBeTruthy();
+    const farmCard = screen.getByText("Farm", { selector: ".factory-run-card li strong" }).closest("article");
+    expect(farmCard).toBeTruthy();
+    fireEvent.click(within(farmCard as HTMLElement).getByRole("button", { name: "Run module" }));
+    expect(socket.commands).toContainEqual({
+      event: "production:run",
+      payload: { factoryId: "factory:home:p1:1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Finish connection" }));
+    expect(socket.commands.some(({ event }) => event === "connection:finish")).toBe(true);
+    expect(screen.getByRole("heading", { name: "Factories and balances" })).toBeTruthy();
   });
 
   it("renders every rulebook item and its manifest status", async () => {
@@ -383,7 +496,7 @@ describe("player app", () => {
       playerId: "p1",
       reconnectToken: "previous-token",
     };
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify(previousSession));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify(previousSession));
     const socket = new FakeSocket();
     socket.responses.set(
       "lobby:reconnect",
@@ -393,13 +506,13 @@ describe("player app", () => {
     await screen.findByText("ABCDEFGHJK");
 
     const otherTabSession = { ...previousSession, reconnectToken: "other-tab-token" };
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify(otherTabSession));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify(otherTabSession));
     socket.connected = false;
     socket.serverEmit("disconnect");
     socket.serverEmit("session:replaced");
 
     expect(await screen.findByText("Seat moved")).toBeTruthy();
-    expect(JSON.parse(localStorage.getItem("stargate-inc-session-v1") ?? "{}"))
+    expect(JSON.parse(window.localStorage.getItem("stargate-inc-session-v1") ?? "{}"))
       .toEqual(otherTabSession);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Return home" }));
@@ -416,7 +529,7 @@ describe("player app", () => {
       playerId: "stale-player",
       reconnectToken: "stale-token",
     };
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify(staleSession));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify(staleSession));
     const socket = new FakeSocket();
     render(<App socket={asSocket(socket)} />);
     expect(socket.commands).toContainEqual({
@@ -429,7 +542,7 @@ describe("player app", () => {
       playerId: "new-player",
       reconnectToken: "new-token",
     };
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify(newerSession));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify(newerSession));
     act(() => {
       socket.callbacks.get("lobby:reconnect")?.({
         ok: false,
@@ -437,7 +550,7 @@ describe("player app", () => {
       });
     });
 
-    expect(JSON.parse(localStorage.getItem("stargate-inc-session-v1") ?? "{}"))
+    expect(JSON.parse(window.localStorage.getItem("stargate-inc-session-v1") ?? "{}"))
       .toEqual(newerSession);
     expect(screen.getByText(/saved game is no longer available/i)).toBeTruthy();
     expect(screen.getByRole("heading", { name: /build the connection/i })).toBeTruthy();
@@ -449,7 +562,7 @@ describe("player app", () => {
     view.lobby.game!.round.pauseSelectionsSubmittedBy = ["p1"];
     view.self.initialSelectionCardId = "pause:p1";
     view.self.pauseSelectionCardId = "player:p1:p2";
-    localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const socket = new FakeSocket();
     socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
     render(<App socket={asSocket(socket)} />);

@@ -23,6 +23,10 @@ import {
 
 import { createGameSocket, type GameSocket } from "./socket.js";
 import { CommsRing } from "./CommsRing.js";
+import {
+  ConnectionRewardPanel,
+  InfrastructurePanel,
+} from "./FactoryPanels.js";
 
 interface SavedSession {
   lobbyId: string;
@@ -42,7 +46,7 @@ function getDefaultSocket(): GameSocket {
 
 function loadSession(): SavedSession | null {
   try {
-    const value = localStorage.getItem(sessionKey);
+    const value = window.localStorage.getItem(sessionKey);
     if (!value) return null;
     const parsed = JSON.parse(value) as Partial<SavedSession>;
     return parsed.lobbyId && parsed.playerId && parsed.reconnectToken
@@ -59,7 +63,7 @@ function saveSession(data: SessionData): SavedSession {
     playerId: data.state.self.playerId,
     reconnectToken: data.reconnectToken,
   };
-  localStorage.setItem(sessionKey, JSON.stringify(saved));
+  window.localStorage.setItem(sessionKey, JSON.stringify(saved));
   return saved;
 }
 
@@ -71,7 +75,7 @@ function sameSession(left: SavedSession | null, right: SavedSession): boolean {
 
 function clearSession(expected?: SavedSession): boolean {
   if (expected && !sameSession(loadSession(), expected)) return false;
-  localStorage.removeItem(sessionKey);
+  window.localStorage.removeItem(sessionKey);
   return true;
 }
 
@@ -380,7 +384,8 @@ function LobbyScreen({ socket, view, unavailable, pending, run, onError }: { soc
 function GameScreen({ socket, view, unavailable, pending, run, onError }: { socket: GameSocket; view: LobbyView; unavailable: boolean; pending: string | null; run: RunCommand; onError: (message: string | null) => void }) {
   const game = view.lobby.game;
   const activeRound = game?.round;
-  const selectionOpen = activeRound?.phase === "initial-selection" || activeRound?.phase === "pause-selection";
+  const rewardsOpen = game?.phase === "connection-rewards";
+  const selectionOpen = !rewardsOpen && (activeRound?.phase === "initial-selection" || activeRound?.phase === "pause-selection");
   const phaseKey = activeRound ? `${activeRound.number}:${activeRound.phase}` : "loading";
   const remainingSeconds = useSelectionCountdown(
     selectionOpen ? view.selectionDeadlineAt : null,
@@ -391,8 +396,8 @@ function GameScreen({ socket, view, unavailable, pending, run, onError }: { sock
     : activeRound?.phase === "initial-selection"
       ? view.self.initialSelectionCardId
       : null;
-  const mayActInPhase = activeRound?.phase === "initial-selection" ||
-    (activeRound?.phase === "pause-selection" && activeRound.pausePlayerIds.includes(view.self.playerId));
+  const mayActInPhase = !rewardsOpen && (activeRound?.phase === "initial-selection" ||
+    (activeRound?.phase === "pause-selection" && activeRound.pausePlayerIds.includes(view.self.playerId)));
   const previousSelection = useRef<{ phaseKey: string; cardId: string | null }>({ phaseKey, cardId: null });
   const cardButtons = useRef(new Map<string, HTMLButtonElement>());
   const handHeading = useRef<HTMLHeadingElement>(null);
@@ -417,7 +422,16 @@ function GameScreen({ socket, view, unavailable, pending, run, onError }: { sock
   const selectionCardId = round.phase === "pause-selection"
     ? view.self.pauseSelectionCardId
     : view.self.initialSelectionCardId;
-  const meter = round.phase === "resolved"
+  const rewards = Object.values(game.connectionRewards);
+  const completedRewards = rewards.filter((reward) => reward?.stage === "complete").length;
+  const meter = rewardsOpen
+    ? {
+        label: `${completedRewards} of ${rewards.length} connection actions complete`,
+        value: `${completedRewards}/${rewards.length}`,
+        status: "OPERATING",
+        progress: rewards.length ? completedRewards / rewards.length * 100 : 100,
+      }
+    : round.phase === "resolved"
     ? { label: "Round resolved", value: "DONE", status: "RESOLVED", progress: 100 }
     : {
         label: `${submittedCount} of ${expectedCount} selections submitted`,
@@ -425,8 +439,21 @@ function GameScreen({ socket, view, unavailable, pending, run, onError }: { sock
         status: "LOCKED IN",
         progress: expectedCount ? submittedCount / expectedCount * 100 : 0,
       };
-  const phaseTitle = round.phase === "initial-selection" ? "Choose your connection" : round.phase === "pause-selection" ? isPausePlayer ? "Choose after the pause" : "Pause players are choosing" : "Connections resolved";
-  const phaseBody = round.phase === "initial-selection" ? "Your choice stays secret until everyone has locked in." : round.phase === "pause-selection" ? "Initial choices are revealed. Pause follow-ups remain secret until all pause players submit." : "Review the network outcome, then begin another round.";
+  const selfReward = game.connectionRewards[view.self.playerId];
+  const phaseTitle = rewardsOpen
+    ? selfReward?.stage === "construction"
+      ? "Shape your production network"
+      : selfReward?.stage === "production"
+        ? "Bring the factories online"
+        : "Connection actions underway"
+    : round.phase === "initial-selection" ? "Choose your connection" : round.phase === "pause-selection" ? isPausePlayer ? "Choose after the pause" : "Pause players are choosing" : "Connections resolved";
+  const phaseBody = rewardsOpen
+    ? selfReward?.stage === "construction"
+      ? "Spend resources to install held modules, or save them for another successful connection."
+      : selfReward?.stage === "production"
+        ? "Choose the factory order. Each choice raises the next dollar-cost multiplier."
+        : "Factory actions resolve independently before the next round can begin."
+    : round.phase === "initial-selection" ? "Your choice stays secret until everyone has locked in." : round.phase === "pause-selection" ? "Initial choices are revealed. Pause follow-ups remain secret until all pause players submit." : "Review the network outcome, then begin another round.";
 
   const submit = (card: SelectionCard) => {
     if (deadlineExpired) return;
@@ -442,15 +469,17 @@ function GameScreen({ socket, view, unavailable, pending, run, onError }: { sock
   };
 
   return <main className="game-layout">
-    <section className="game-heading"><div><div className="eyebrow">ROUND {String(round.number).padStart(2, "0")} // {round.phase.replace("-", " ").toUpperCase()}</div><h1>{phaseTitle}</h1><p>{phaseBody}</p></div><div className="round-status">{selectionOpen && <SelectionCountdown seconds={remainingSeconds} />}<div className="submission-meter" aria-label={meter.label}><strong>{meter.value}</strong><span>{meter.status}</span><div><i style={{ width: `${meter.progress}%` }} /></div></div></div></section>
+    <section className="game-heading"><div><div className="eyebrow">ROUND {String(round.number).padStart(2, "0")} // {rewardsOpen ? "CONNECTION ACTIONS" : round.phase.replace("-", " ").toUpperCase()}</div><h1>{phaseTitle}</h1><p>{phaseBody}</p></div><div className="round-status">{selectionOpen && <SelectionCountdown seconds={remainingSeconds} />}<div className="submission-meter" aria-label={meter.label}><strong>{meter.value}</strong><span>{meter.status}</span><div><i style={{ width: `${meter.progress}%` }} /></div></div></div></section>
     <CommsRing socket={socket} view={view} disabled={unavailable} onError={onError} />
     {mayChoose && <section className="panel hand-panel" aria-labelledby="hand-title"><div className="section-title"><div><div className="eyebrow">PRIVATE // ONLY YOU CAN SEE THIS</div><h2 id="hand-title" ref={handHeading} tabIndex={-1}>Your hand</h2></div>{selfSubmitted && <div className="selection-lock"><span className="locked-label">✓ Selection locked</span><button className="undo-selection" type="button" disabled={unavailable || deadlineExpired} onClick={undo}>{pending === "Undoing selection" ? "Undoing…" : "Undo selection"}</button></div>}</div>{deadlineExpired && <p className="deadline-message">Time is up. The server will connect any player without a locked choice to themself.</p>}{eligibleCards.length ? <div className="card-grid">{eligibleCards.map((card) => <button ref={(button) => { if (button) cardButtons.current.set(card.id, button); else cardButtons.current.delete(card.id); }} className={`game-card ${card.kind} ${selfSubmitted && selectionCardId === card.id ? "selected" : ""}`} key={card.id} disabled={unavailable || selfSubmitted || deadlineExpired} onClick={() => submit(card)}><span className="card-type">{cardKindLabel(card)}</span><strong>{cardLabel(view, card)}</strong><small>{card.kind === "pause" ? "Reveal after the others" : card.kind === "player" && card.targetPlayerId === view.self.playerId ? "Return played cards to hand" : "Attempt connection"}</small><span className="card-action">{selfSubmitted && selectionCardId === card.id ? "Locked" : "Select"}</span></button>)}</div> : <EmptyState title="No target cards left" body="Your hand has no valid choice for this phase." />}</section>}
     {!mayChoose && round.phase !== "resolved" && <section className="panel waiting-panel"><div className="orbit" aria-hidden="true"><i /></div><h2>{selfSubmitted || !isPausePlayer ? "Choice secured" : "Waiting for your turn"}</h2><p>Waiting for {Math.max(0, expectedCount - submittedCount)} {Math.max(0, expectedCount - submittedCount) === 1 ? "player" : "players"} to submit.</p></section>}
     {round.revealedInitialSelections && <RevealPanel title="Initial reveal" selections={round.revealedInitialSelections} view={view} />}
     {round.revealedPauseSelections && <RevealPanel title="Pause reveal" selections={round.revealedPauseSelections} view={view} />}
     {round.resolution && <ResultsPanel view={view} />}
+    <ConnectionRewardPanel socket={socket} view={view} unavailable={unavailable} pending={pending} run={run} />
     <PlayerStatePanel view={view} />
-    {round.phase === "resolved" && <section className="next-round"><div><div className="eyebrow">KEEP THE NETWORK MOVING</div><h2>Ready for round {round.number + 1}?</h2></div><button className="primary-button light" disabled={unavailable} onClick={() => run("Starting next round", (callback) => socket.emit("round:next", {}, callback))}>{pending === "Starting next round" ? "Starting…" : "Next round"}<span aria-hidden="true">→</span></button></section>}
+    <InfrastructurePanel view={view} />
+    {game.phase === "connection-round" && round.phase === "resolved" && <section className="next-round"><div><div className="eyebrow">KEEP THE NETWORK MOVING</div><h2>Ready for round {round.number + 1}?</h2></div><button className="primary-button light" disabled={unavailable} onClick={() => run("Starting next round", (callback) => socket.emit("round:next", {}, callback))}>{pending === "Starting next round" ? "Starting…" : "Next round"}<span aria-hidden="true">→</span></button></section>}
   </main>;
 }
 
@@ -479,7 +508,7 @@ function RevealPanel({ title, selections, view }: { title: string; selections: R
 function ResultsPanel({ view }: { view: LobbyView }) {
   const resolution = view.lobby.game?.round.resolution;
   if (!resolution) return null;
-  return <section className="panel results-panel"><div className="eyebrow">ROUND OUTCOME</div><h2>Connection report</h2><ul>{Object.entries(resolution.playerResults).map(([playerId, result]) => <li className={result.status} key={playerId}><span aria-hidden="true">{result.status === "connected" ? "✓" : "×"}</span><div><strong>{resultLabel(view, playerId, result)}</strong><small>{result.status === "connected" ? `${result.connection.step} selection` : "Compensation reward unresolved"}</small></div></li>)}</ul>{resolution.unresolvedEffects.length > 0 && <div className="unresolved-callout"><strong>Reward step not yet playable</strong><p>The connection result is final. Module and factory production rules are planned but not yet playable. Trade and failed-connection compensation remain unresolved.</p></div>}</section>;
+  return <section className="panel results-panel"><div className="eyebrow">ROUND OUTCOME</div><h2>Connection report</h2><ul>{Object.entries(resolution.playerResults).map(([playerId, result]) => <li className={result.status} key={playerId}><span aria-hidden="true">{result.status === "connected" ? "✓" : "×"}</span><div><strong>{resultLabel(view, playerId, result)}</strong><small>{result.status === "connected" ? `${result.connection.step} selection` : "Compensation reward unresolved"}</small></div></li>)}</ul>{resolution.unresolvedEffects.length > 0 && <div className="unresolved-callout"><strong>Some rewards remain unresolved</strong><p>Factory actions are playable after self and exoplanet connections. Trade and failed-connection compensation are not yet defined.</p></div>}</section>;
 }
 
 function PlayerStatePanel({ view }: { view: LobbyView }) {

@@ -57,10 +57,11 @@ vi.mock("./socket.js", () => ({
 }));
 
 import { App } from "./App.js";
+import "./testStorage.js";
 
 afterEach(() => {
   cleanup();
-  localStorage.clear();
+  window.localStorage.clear();
 });
 
 describe("app socket lifecycle", () => {

@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  startingResources,
   type CommandResult,
   type GestureEvent,
   type LobbyView,
@@ -12,6 +13,7 @@ import {
 
 import { CommsRing } from "./CommsRing.js";
 import type { GameSocket } from "./socket.js";
+import "./testStorage.js";
 
 type Listener = (...args: never[]) => void;
 
@@ -51,6 +53,27 @@ const players = {
   p3: { id: "p3", name: "Orion", connected: false },
 };
 
+function publicGamePlayer(player: (typeof players)[keyof typeof players]) {
+  return {
+    ...player,
+    handSize: 0,
+    playedCards: [],
+    resources: { ...startingResources },
+    heldModules: [],
+    homeFactories: [],
+  };
+}
+
+function exoplanet(id: string, name: string) {
+  return {
+    id,
+    name,
+    factorySlots: [null, null, null],
+    moduleDeck: [],
+    moduleDiscard: [],
+  };
+}
+
 function view(playing = false): LobbyView {
   return {
     lobby: {
@@ -61,15 +84,17 @@ function view(playing = false): LobbyView {
       players,
       game: playing ? {
         id: "game",
+        phase: "connection-round",
+        connectionRewards: {},
         playerOrder: ["p1", "p2", "p3"],
         exoplanets: [
-          { id: "alpha", name: "Exoplanet Alpha" },
-          { id: "beta", name: "Exoplanet Beta" },
+          exoplanet("alpha", "Exoplanet Alpha"),
+          exoplanet("beta", "Exoplanet Beta"),
         ],
         players: {
-          p1: { ...players.p1, handSize: 0, playedCards: [] },
-          p2: { ...players.p2, handSize: 0, playedCards: [] },
-          p3: { ...players.p3, handSize: 0, playedCards: [] },
+          p1: publicGamePlayer(players.p1),
+          p2: publicGamePlayer(players.p2),
+          p3: publicGamePlayer(players.p3),
         },
         round: {
           number: 1,
@@ -108,8 +133,8 @@ function maxTargetView(): LobbyView {
       game: {
         ...current.lobby.game!,
         playerOrder,
-        exoplanets: Array.from({ length: 4 }, (_, index) => ({ id: `exo-${index + 1}`, name: `Exoplanet ${index + 1}` })),
-        players: Object.fromEntries(playerOrder.map((id) => [id, { ...maxPlayers[id]!, handSize: 0, playedCards: [] }])),
+        exoplanets: Array.from({ length: 4 }, (_, index) => exoplanet(`exo-${index + 1}`, `Exoplanet ${index + 1}`)),
+        players: Object.fromEntries(playerOrder.map((id) => [id, publicGamePlayer(maxPlayers[id] as (typeof players)[keyof typeof players])])),
       },
     },
   };
@@ -153,7 +178,7 @@ function gesture(overrides: Partial<GestureEvent> = {}): GestureEvent {
 }
 
 beforeEach(() => {
-  localStorage.clear();
+  window.localStorage.clear();
 });
 
 afterEach(() => {
@@ -338,7 +363,7 @@ describe("Comms Ring", () => {
     const rendered = render(<CommsRing socket={asSocket(socket)} view={view()} disabled={false} onError={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Mute gestures" }));
 
-    expect(localStorage.getItem("stargate-inc-gestures-muted-v1")).toBe("true");
+    expect(window.localStorage.getItem("stargate-inc-gestures-muted-v1")).toBe("true");
     act(() => socket.serverEmit("gesture:received", gesture()));
     expect(document.querySelector(".gesture-signal")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe("Gestures muted.");

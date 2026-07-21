@@ -75,7 +75,7 @@ export interface CommsRingProps {
 
 function readMuted(): boolean {
   try {
-    return localStorage.getItem(muteKey) === "true";
+    return window.localStorage.getItem(muteKey) === "true";
   } catch {
     return false;
   }
@@ -329,7 +329,7 @@ export function CommsRing({ socket, view, disabled, onError }: CommsRingProps) {
     setMuted(next);
     mutedRef.current = next;
     try {
-      localStorage.setItem(muteKey, String(next));
+      window.localStorage.setItem(muteKey, String(next));
     } catch {
       // The preference still applies for this tab when storage is unavailable.
     }
