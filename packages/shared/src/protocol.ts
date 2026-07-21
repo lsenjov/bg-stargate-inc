@@ -48,6 +48,30 @@ export const selectionCommandSchema = z.strictObject({
 
 export const selectionUndoCommandSchema = z.strictObject({});
 
+const factoryIdSchema = z.string().min(1).max(256);
+const moduleIdSchema = z.string().min(1).max(256);
+
+const factoryConstructionTargetSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("new-factory") }),
+  z.strictObject({
+    kind: z.literal("factory"),
+    factoryId: factoryIdSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("exoplanet-slot"),
+    slotIndex: z.number().int().min(0).max(2),
+  }),
+]);
+
+export const factoryConstructionCommandSchema = z.strictObject({
+  moduleId: moduleIdSchema,
+  target: factoryConstructionTargetSchema,
+});
+
+export const factoryRunCommandSchema = z.strictObject({
+  factoryId: factoryIdSchema,
+});
+
 export const playerGestureKinds = [
   "beckon",
   "nod",
@@ -91,6 +115,10 @@ export type ReconnectLobbyCommand = z.input<typeof reconnectLobbySchema>;
 export type EmptyCommand = z.input<typeof emptyCommandSchema>;
 export type SelectionCommand = z.input<typeof selectionCommandSchema>;
 export type SelectionUndoCommand = z.input<typeof selectionUndoCommandSchema>;
+export type FactoryConstructionCommand = z.input<
+  typeof factoryConstructionCommandSchema
+>;
+export type FactoryRunCommand = z.input<typeof factoryRunCommandSchema>;
 export type PlayerGestureKind = (typeof playerGestureKinds)[number];
 export type ExoplanetGestureKind = (typeof exoplanetGestureKinds)[number];
 export type PlayerGestureTarget = {
@@ -140,7 +168,15 @@ export type CommandErrorCode =
   | "selection-not-submitted"
   | "card-unavailable"
   | "player-did-not-pause"
-  | "pause-follow-up-must-target";
+  | "pause-follow-up-must-target"
+  | "connection-reward-unavailable"
+  | "module-unavailable"
+  | "insufficient-resources"
+  | "factory-not-found"
+  | "factory-type-mismatch"
+  | "factory-slot-unavailable"
+  | "factory-already-operated"
+  | "factory-run-unavailable";
 
 export interface CommandError {
   code: CommandErrorCode;
@@ -209,6 +245,26 @@ export interface ClientToServerEvents {
   ) => void;
   "selection:undo": (
     command: SelectionUndoCommand,
+    callback: CommandCallback<LobbyView>,
+  ) => void;
+  "factory:construct": (
+    command: FactoryConstructionCommand,
+    callback: CommandCallback<LobbyView>,
+  ) => void;
+  "production:begin": (
+    command: EmptyCommand,
+    callback: CommandCallback<LobbyView>,
+  ) => void;
+  "production:run": (
+    command: FactoryRunCommand,
+    callback: CommandCallback<LobbyView>,
+  ) => void;
+  "production:stop-factory": (
+    command: EmptyCommand,
+    callback: CommandCallback<LobbyView>,
+  ) => void;
+  "connection:finish": (
+    command: EmptyCommand,
     callback: CommandCallback<LobbyView>,
   ) => void;
   "round:next": (

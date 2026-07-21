@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   exoplanetGestureKinds,
+  factoryConstructionCommandSchema,
+  factoryRunCommandSchema,
   gestureCommandSchema,
   playerGestureKinds,
   selectionUndoCommandSchema,
@@ -57,6 +59,60 @@ describe("gesture protocol", () => {
     { target: { kind: "unknown", playerId }, gesture: "nod" },
   ])("strictly rejects malformed payload %#", (payload) => {
     expect(gestureCommandSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("factory command protocol", () => {
+  it("accepts each strict construction target", () => {
+    for (const target of [
+      { kind: "new-factory" },
+      { kind: "factory", factoryId: "factory-1" },
+      { kind: "exoplanet-slot", slotIndex: 2 },
+    ]) {
+      expect(
+        factoryConstructionCommandSchema.safeParse({
+          moduleId: "module-1",
+          target,
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it.each([
+    null,
+    {},
+    { moduleId: "", target: { kind: "new-factory" } },
+    { moduleId: "module-1", target: { kind: "factory" } },
+    {
+      moduleId: "module-1",
+      target: { kind: "exoplanet-slot", slotIndex: 3 },
+    },
+    {
+      moduleId: "module-1",
+      target: { kind: "new-factory", extra: true },
+    },
+    {
+      moduleId: "module-1",
+      target: { kind: "new-factory" },
+      extra: true,
+    },
+  ])("rejects malformed construction payload %#", (payload) => {
+    expect(factoryConstructionCommandSchema.safeParse(payload).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts only a strict factory run command", () => {
+    expect(factoryRunCommandSchema.safeParse({ factoryId: "factory-1" }).success)
+      .toBe(true);
+    for (const payload of [
+      null,
+      {},
+      { factoryId: "" },
+      { factoryId: "factory-1", extra: true },
+    ]) {
+      expect(factoryRunCommandSchema.safeParse(payload).success).toBe(false);
+    }
   });
 });
 

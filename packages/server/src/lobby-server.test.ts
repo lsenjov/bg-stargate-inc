@@ -3,9 +3,12 @@ import type { AddressInfo } from "node:net";
 import {
   pauseCardId,
   playerCardId,
+  startingModuleId,
   type ClientToServerEvents,
   type CommandResult,
   type EmptyCommand,
+  type FactoryConstructionCommand,
+  type FactoryRunCommand,
   type GestureCommand,
   type GestureEvent,
   type LobbyView,
@@ -96,10 +99,31 @@ function reconnectLobby(
 
 function emptyCommand(
   socket: TestSocket,
-  event: "game:start" | "round:next",
+  event:
+    | "game:start"
+    | "production:begin"
+    | "production:stop-factory"
+    | "connection:finish"
+    | "round:next",
   command: EmptyCommand = {},
 ): Promise<CommandResult<LobbyView>> {
   return new Promise((resolve) => socket.emit(event, command, resolve));
+}
+
+function factoryConstructionCommand(
+  socket: TestSocket,
+  command: FactoryConstructionCommand,
+): Promise<CommandResult<LobbyView>> {
+  return new Promise((resolve) =>
+    socket.emit("factory:construct", command, resolve)
+  );
+}
+
+function factoryRunCommand(
+  socket: TestSocket,
+  command: FactoryRunCommand,
+): Promise<CommandResult<LobbyView>> {
+  return new Promise((resolve) => socket.emit("production:run", command, resolve));
 }
 
 function selectionCommand(
@@ -308,6 +332,15 @@ describe("online lobby flow", () => {
     expectFailure(await malformed("lobby:reconnect", {}), "invalid-input");
     expectFailure(await malformed("selection:pause", null), "invalid-input");
     expectFailure(await malformed("selection:pause", "card"), "invalid-input");
+    expectFailure(await malformed("factory:construct", null), "invalid-input");
+    expectFailure(
+      await malformed("factory:construct", {
+        moduleId: "module",
+        target: { kind: "exoplanet-slot", slotIndex: 3 },
+      }),
+      "invalid-input",
+    );
+    expectFailure(await malformed("production:run", null), "invalid-input");
     expectFailure(await malformed("round:next", null), "invalid-input");
     expectFailure(await malformed("round:next", 1), "invalid-input");
 
@@ -422,12 +455,76 @@ describe("secret game flow", () => {
       step: "initial",
     });
 
+    expectSuccess(await emptyCommand(third.socket, "connection:finish"));
     const next = expectSuccess(await emptyCommand(second.socket, "round:next"));
     expect(next.lobby.game?.round).toMatchObject({
       number: 2,
       phase: "initial-selection",
       initialSelectionsSubmittedBy: [],
     });
+  });
+
+  it("constructs and operates factories through server-authoritative commands", async () => {
+    const [host, second, third] = await createThreePlayerLobby();
+    expectSuccess(await emptyCommand(host.socket, "game:start"));
+    for (const player of [host, second]) {
+      const playerId = player.state.self.playerId;
+      expectSuccess(
+        await selectionCommand(player.socket, "selection:initial", {
+          cardId: playerCardId(playerId, playerId),
+        }),
+      );
+    }
+    const hostId = host.state.self.playerId;
+    const thirdId = third.state.self.playerId;
+    const resolved = expectSuccess(
+      await selectionCommand(third.socket, "selection:initial", {
+        cardId: playerCardId(thirdId, thirdId),
+      }),
+    );
+    expect(resolved.lobby.game?.phase).toBe("connection-rewards");
+    expectFailure(await emptyCommand(host.socket, "round:next"), "wrong-phase");
+
+    const withSolar = expectSuccess(
+      await factoryConstructionCommand(host.socket, {
+        moduleId: startingModuleId(hostId, "solar-farm"),
+        target: { kind: "new-factory" },
+      }),
+    );
+    const factoryId = withSolar.lobby.game?.players[hostId]?.homeFactories[0]?.id;
+    expect(factoryId).toBeTruthy();
+    expectSuccess(
+      await factoryConstructionCommand(host.socket, {
+        moduleId: startingModuleId(hostId, "farm"),
+        target: { kind: "factory", factoryId: factoryId! },
+      }),
+    );
+    expectSuccess(await emptyCommand(host.socket, "production:begin"));
+    const afterSolar = expectSuccess(
+      await factoryRunCommand(host.socket, { factoryId: factoryId! }),
+    );
+    expect(afterSolar.lobby.game?.players[hostId]?.resources).toMatchObject({
+      dollars: 19,
+      energy: 7,
+    });
+    const afterFarm = expectSuccess(
+      await factoryRunCommand(host.socket, { factoryId: factoryId! }),
+    );
+    expect(afterFarm.lobby.game?.players[hostId]?.resources).toMatchObject({
+      dollars: 18,
+      energy: 6,
+      food: 2,
+    });
+    expectFailure(
+      await factoryRunCommand(host.socket, { factoryId: factoryId! }),
+      "factory-already-operated",
+    );
+
+    for (const player of [host, second, third]) {
+      expectSuccess(await emptyCommand(player.socket, "connection:finish"));
+    }
+    const ready = expectSuccess(await emptyCommand(host.socket, "round:next"));
+    expect(ready.lobby.game?.round.number).toBe(2);
   });
 
   it("reveals initial pause cards while hiding follow-ups until resolution", async () => {
@@ -643,6 +740,9 @@ describe("selection undo and deadlines", () => {
         cardId: playerCardId(thirdId, thirdId),
       }),
     );
+    for (const player of [host, second, third]) {
+      expectSuccess(await emptyCommand(player.socket, "connection:finish"));
+    }
     await delay(2);
     const nextRound = expectSuccess(await emptyCommand(host.socket, "round:next"));
     expect(nextRound.lobby.game?.round.number).toBe(2);

@@ -3,16 +3,23 @@ import { createServer, type Server as HttpServer } from "node:http";
 
 import {
   GameRuleError,
+  beginProduction,
+  constructModule,
   createGame,
   createLobbySchema,
   emptyCommandSchema,
+  factoryConstructionCommandSchema,
+  factoryRunCommandSchema,
+  finishConnectionReward,
   gestureCommandSchema,
   joinLobbySchema,
   playerCardId,
   reconnectLobbySchema,
+  runNextFactoryModule,
   selectionCommandSchema,
   selectionUndoCommandSchema,
   startNextRound,
+  stopActiveFactory,
   submitInitialSelection,
   submitPauseSelection,
   toPublicGameState,
@@ -882,6 +889,109 @@ export function createGameServer(options: GameServerOptions = {}): GameServer {
           );
         }
         syncSelectionDeadline(lobby);
+        emitLobby(lobby);
+        return viewLobby(lobby, session.playerId);
+      });
+    });
+
+    socket.on("factory:construct", (input, callback) => {
+      runCommand(callback, () => {
+        const parsed = factoryConstructionCommandSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CommandFailure(
+            "invalid-input",
+            "Invalid factory construction payload",
+          );
+        }
+        const session = requireSession(socket);
+        const lobby = getLobby(session.lobbyId);
+        if (!lobby.game) {
+          throw new CommandFailure("game-not-started", "The game has not started");
+        }
+        lobby.game = constructModule(
+          lobby.game,
+          session.playerId,
+          parsed.data.moduleId,
+          parsed.data.target,
+        );
+        emitLobby(lobby);
+        return viewLobby(lobby, session.playerId);
+      });
+    });
+
+    socket.on("production:begin", (input, callback) => {
+      runCommand(callback, () => {
+        const parsed = emptyCommandSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CommandFailure("invalid-input", "Invalid production payload");
+        }
+        const session = requireSession(socket);
+        const lobby = getLobby(session.lobbyId);
+        if (!lobby.game) {
+          throw new CommandFailure("game-not-started", "The game has not started");
+        }
+        lobby.game = beginProduction(lobby.game, session.playerId);
+        emitLobby(lobby);
+        return viewLobby(lobby, session.playerId);
+      });
+    });
+
+    socket.on("production:run", (input, callback) => {
+      runCommand(callback, () => {
+        const parsed = factoryRunCommandSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CommandFailure("invalid-input", "Invalid factory run payload");
+        }
+        const session = requireSession(socket);
+        const lobby = getLobby(session.lobbyId);
+        if (!lobby.game) {
+          throw new CommandFailure("game-not-started", "The game has not started");
+        }
+        lobby.game = runNextFactoryModule(
+          lobby.game,
+          session.playerId,
+          parsed.data.factoryId,
+        );
+        emitLobby(lobby);
+        return viewLobby(lobby, session.playerId);
+      });
+    });
+
+    socket.on("production:stop-factory", (input, callback) => {
+      runCommand(callback, () => {
+        const parsed = emptyCommandSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CommandFailure(
+            "invalid-input",
+            "Invalid stop-factory payload",
+          );
+        }
+        const session = requireSession(socket);
+        const lobby = getLobby(session.lobbyId);
+        if (!lobby.game) {
+          throw new CommandFailure("game-not-started", "The game has not started");
+        }
+        lobby.game = stopActiveFactory(lobby.game, session.playerId);
+        emitLobby(lobby);
+        return viewLobby(lobby, session.playerId);
+      });
+    });
+
+    socket.on("connection:finish", (input, callback) => {
+      runCommand(callback, () => {
+        const parsed = emptyCommandSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CommandFailure(
+            "invalid-input",
+            "Invalid connection finish payload",
+          );
+        }
+        const session = requireSession(socket);
+        const lobby = getLobby(session.lobbyId);
+        if (!lobby.game) {
+          throw new CommandFailure("game-not-started", "The game has not started");
+        }
+        lobby.game = finishConnectionReward(lobby.game, session.playerId);
         emitLobby(lobby);
         return viewLobby(lobby, session.playerId);
       });
