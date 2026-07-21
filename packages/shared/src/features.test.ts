@@ -36,6 +36,10 @@ describe("feature manifest", () => {
       "pause-exoplanet-retry",
       "self-connection-reset",
       "repeated-round-advancement",
+      "internal-production-reward",
+      "module-schema",
+      "starting-module-setup",
+      "module-construction",
     ]);
   });
 
@@ -47,7 +51,7 @@ describe("feature manifest", () => {
       "every seated player is connected",
     );
     expect(getFeature("repeated-round-advancement")?.rule).toContain(
-      "After resolution",
+      "After resolution and every eligible factory operator finishes",
     );
     expect(getFeature("repeated-round-advancement")?.rule).toContain(
       "card state carried forward",
@@ -88,19 +92,20 @@ describe("feature manifest", () => {
     );
   });
 
-  it("marks factory and module rules as planned rather than playable", () => {
-    const plannedFeatureIds = [
+  it("marks factory and construction rules playable while acquisition stays planned", () => {
+    const playableFactoryFeatureIds = [
       "internal-production-reward",
       "module-schema",
       "starting-module-setup",
-      "module-acquisition",
       "module-construction",
     ] as const;
 
-    for (const id of plannedFeatureIds) {
-      expect(getFeature(id)?.status).toBe("planned");
-      expect(playableFeatureIds).not.toContain(id);
+    for (const id of playableFactoryFeatureIds) {
+      expect(getFeature(id)?.status).toBe("playable");
+      expect(playableFeatureIds).toContain(id);
     }
+    expect(getFeature("module-acquisition")?.status).toBe("planned");
+    expect(playableFeatureIds).not.toContain("module-acquisition");
   });
 
   it("states the module schema and exact starting setup", () => {
@@ -108,7 +113,7 @@ describe("feature manifest", () => {
       "Every module has a name, type, construction cost, running cost, optional inputs, and outputs. Installation sets its owner.",
     );
     expect(getFeature("starting-module-setup")?.rule).toBe(
-      "At setup, each player installs and owns one of each module, arranged among any number of same-type home-planet factories: Solar Farm — Rural; construction 1 Metal; running $1; no inputs; output 3 Energy. Farm — Rural; construction 1 Metal and 2 Energy; running $1; input 1 Energy; output 1 Food. Mine — Underground; construction 1 Food and 2 Energy; running $1; input 1 Energy; output 1 Ore. Smelter — Industrial; construction 2 Metal; running $1; inputs 1 Energy and 1 Ore; output 1 Metal. MRE Factory — Industrial; construction 2 Metal; running $1; inputs 1 Energy and 1 Food; output 1 MRE. Training Center — Underground; construction 2 MRE, 2 Metal, and 2 Energy; running $2; inputs 1 Energy, 1 MRE, and 1 Metal; output 1 Team.",
+      "Each player begins with $20; 6 Energy, 1 Food, 8 Metal, and 2 MRE; no Ore or Teams; and one held copy of each module: Solar Farm — Rural; construction 1 Metal; running $1; no inputs; output 3 Energy. Farm — Rural; construction 1 Metal and 2 Energy; running $1; input 1 Energy; output 1 Food. Mine — Underground; construction 1 Food and 2 Energy; running $1; input 1 Energy; output 1 Ore. Smelter — Industrial; construction 2 Metal; running $1; inputs 1 Energy and 1 Ore; output 1 Metal. MRE Factory — Industrial; construction 2 Metal; running $1; inputs 1 Energy and 1 Food; output 1 MRE. Training Center — Underground; construction 2 MRE, 2 Metal, and 2 Energy; running $2; inputs 1 Energy, 1 MRE, and 1 Metal; output 1 Team.",
     );
   });
 
@@ -116,34 +121,23 @@ describe("feature manifest", () => {
     const production = getFeature("internal-production-reward");
 
     expect(production?.rule).toContain("unlimited factory slots");
-    expect(production?.rule).toContain("exoplanets begin with three");
-    expect(production?.rule).toContain("any number of modules of one type");
+    expect(production?.status).toBe("playable");
+    expect(production?.rule).toContain("exoplanets begin with three empty slots");
     expect(production?.rule).toContain("self- or exoplanet connection");
-    expect(production?.rule).toContain("oldest-first until the player stops");
+    expect(production?.rule).toContain("chooses unrun factories in any order");
     expect(production?.rule).toContain("1x, 2x, 3x");
-    expect(production?.rule).toContain(
-      "without changing earlier factories' multipliers",
-    );
+    expect(production?.rule).toContain("inputs are not multiplied");
+    expect(production?.rule).toContain("outputs are available immediately");
+    expect(production?.rule).toContain("regardless of module ownership");
   });
 
   it("states module acquisition limits", () => {
     const acquisition = getFeature("module-acquisition");
 
-    expect(acquisition?.rule).toContain(
-      "Each exoplanet has its own face-down module deck",
-    );
-    expect(acquisition?.rule).toContain("its own discard pile");
-    expect(acquisition?.rule).toContain(
-      "one more module than Teams spent",
-    );
-    expect(acquisition?.rule).toContain("from that deck");
-    expect(acquisition?.rule).toContain("put the rest in its discard pile");
-    expect(acquisition?.rule).toContain(
-      "from that exoplanet's discard pile",
-    );
-    expect(acquisition?.rule).toContain("spend one Team to choose one");
-    expect(acquisition?.rule).toContain("At most one module");
-    expect(acquisition?.rule).toContain("per turn");
+    expect(acquisition?.status).toBe("planned");
+    expect(acquisition?.rule).toContain("currently empty");
+    expect(acquisition?.rule).toContain("spend Teams");
+    expect(acquisition?.rule).toContain("remain held for later construction");
   });
 
   it("states module construction, type, ownership, and location costs", () => {
@@ -151,12 +145,11 @@ describe("feature manifest", () => {
 
     expect(construction?.rule).toContain("construction cost");
     expect(construction?.rule).toContain("at that location");
-    expect(construction?.rule).toContain("match an established factory type");
-    expect(construction?.rule).toContain(
-      "first module installed in an empty factory slot establishes that type",
-    );
-    expect(construction?.rule).toContain("mark its owner");
+    expect(construction?.rule).toContain("same-type factory");
+    expect(construction?.rule).toContain("permanent factory");
+    expect(construction?.rule).toContain("own it");
     expect(construction?.rule).toContain("also costs one Team");
+    expect(construction?.rule).toContain("remain held for later connections");
   });
 
   it("derives every area and scope statement from the supplied manifest", () => {

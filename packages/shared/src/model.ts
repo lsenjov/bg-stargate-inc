@@ -157,7 +157,6 @@ export type PlayerResult = ConnectedPlayerResult | FailedPlayerResult;
 
 export type UnresolvedEffect =
   | { kind: "trade"; playerIds: readonly [PlayerId, PlayerId] }
-  | { kind: "internal-production"; playerId: PlayerId }
   | { kind: "compensation"; playerId: PlayerId };
 
 export interface RoundResolution {

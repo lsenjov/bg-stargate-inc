@@ -37,9 +37,12 @@ Environment variables are documented in [`.env.example`](.env.example). They are
 - Secret simultaneous connection-card selection and reveal.
 - Mutual player connections, exclusive exoplanet connections, and pause follow-up resolution.
 - Played-card exhaustion and self-connection card reset.
+- Public dollar/resource balances, held starting modules, and permanent typed factories.
+- Module construction after successful self/exoplanet connections.
+- Oldest-first factory production with player-chosen running-cost multipliers and immediate output chaining.
 - Advance through repeated connection-selection rounds.
 
-Module and factory production rules are documented and planned, but are not implemented in the app. Trade rewards, failed-connection compensation, economy, scoring, the board, the wider turn loop, and the end game remain unresolved. The app displays these limits rather than inventing rules.
+Exoplanet module decks are empty, so module acquisition is planned rather than playable. Trade rewards, failed-connection compensation, scoring, the board, the wider turn loop, and the end game remain unresolved. The app displays these limits rather than inventing rules.
 
 ## Persistence and service limits
 
