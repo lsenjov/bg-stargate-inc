@@ -1,9 +1,12 @@
 import type {
   CardId,
   Connection,
-  Exoplanet,
+  ConnectionRewardState,
   ExoplanetId,
   ExoplanetSelectionCard,
+  ExoplanetSetup,
+  Factory,
+  FactoryConstructionTarget,
   FailureReason,
   GamePlayer,
   GameSetup,
@@ -19,6 +22,12 @@ import type {
   TargetSelectionCard,
   UnresolvedEffect,
 } from "./model.js";
+import {
+  createStartingModules,
+  getModuleDefinition,
+  materialResources,
+  startingResources,
+} from "./modules.js";
 
 export type GameRuleErrorCode =
   | "invalid-setup"
@@ -28,7 +37,13 @@ export type GameRuleErrorCode =
   | "selection-not-submitted"
   | "card-unavailable"
   | "player-did-not-pause"
-  | "pause-follow-up-must-target";
+  | "pause-follow-up-must-target"
+  | "connection-reward-unavailable"
+  | "module-unavailable"
+  | "insufficient-resources"
+  | "factory-not-found"
+  | "factory-type-mismatch"
+  | "factory-slot-unavailable";
 
 export class GameRuleError extends Error {
   constructor(
@@ -92,6 +107,7 @@ function cloneGameState(state: GameState): GameState {
       clone.round.resolution.playerResults,
     );
   }
+  clone.connectionRewards = copyPlayerRecord(clone.connectionRewards);
   return clone;
 }
 
@@ -113,7 +129,7 @@ export function pauseCardId(ownerId: PlayerId): CardId {
 function createPlayerCards(
   ownerId: PlayerId,
   playerIds: PlayerId[],
-  exoplanets: Exoplanet[],
+  exoplanets: ExoplanetSetup[],
 ): SelectionCard[] {
   const playerCards: PlayerSelectionCard[] = playerIds.map((targetPlayerId) => ({
     id: playerCardId(ownerId, targetPlayerId),
@@ -186,14 +202,24 @@ export function createGame(setup: GameSetup): GameState {
       connected: true,
       hand: createPlayerCards(player.id, playerOrder, setup.exoplanets),
       playedCards: [],
+      resources: structuredClone(startingResources),
+      heldModules: createStartingModules(player.id),
+      homeFactories: [],
     });
   }
 
   return {
     id: setup.id,
+    phase: "connection-round",
     playerOrder,
     players,
-    exoplanets: structuredClone(setup.exoplanets),
+    exoplanets: setup.exoplanets.map((exoplanet) => ({
+      ...exoplanet,
+      factorySlots: [null, null, null],
+      moduleDeck: [],
+      moduleDiscard: [],
+    })),
+    connectionRewards: createPlayerRecord(),
     round: createRound(1),
   };
 }
@@ -207,6 +233,162 @@ function getPlayer(state: GameState, playerId: PlayerId): GamePlayer {
     throw new GameRuleError("unknown-player", `Unknown player: ${playerId}`);
   }
   return player;
+}
+
+function getConnectionReward(
+  state: GameState,
+  playerId: PlayerId,
+): ConnectionRewardState {
+  const reward = state.connectionRewards[playerId];
+  if (state.phase !== "connection-rewards" || !reward || reward.stage === "complete") {
+    throw new GameRuleError(
+      "connection-reward-unavailable",
+      "This player does not have an active connection reward",
+    );
+  }
+  return reward;
+}
+
+function canPay(
+  player: GamePlayer,
+  cost: Partial<Record<keyof GamePlayer["resources"], number>>,
+): boolean {
+  return Object.entries(cost).every(([resource, amount]) =>
+    player.resources[resource as keyof GamePlayer["resources"]] >= (amount ?? 0)
+  );
+}
+
+function payMaterialCost(
+  player: GamePlayer,
+  cost: Partial<Record<(typeof materialResources)[number], number>>,
+): void {
+  if (!canPay(player, cost)) {
+    throw new GameRuleError(
+      "insufficient-resources",
+      "The player cannot afford this construction",
+    );
+  }
+  for (const resource of materialResources) {
+    player.resources[resource] -= cost[resource] ?? 0;
+  }
+}
+
+function locationFactories(
+  state: GameState,
+  playerId: PlayerId,
+  reward: ConnectionRewardState,
+): Factory[] {
+  if (reward.location.kind === "home") {
+    return getPlayer(state, playerId).homeFactories;
+  }
+  const exoplanetId = reward.location.exoplanetId;
+  const exoplanet = state.exoplanets.find(
+    ({ id }) => id === exoplanetId,
+  );
+  if (!exoplanet) {
+    throw new GameRuleError("factory-not-found", "Connection location not found");
+  }
+  return exoplanet.factorySlots.filter(
+    (factory): factory is Factory => factory !== null,
+  );
+}
+
+function createFactoryId(
+  playerId: PlayerId,
+  reward: ConnectionRewardState,
+  index: number,
+): string {
+  return reward.location.kind === "home"
+    ? `factory:home:${playerId}:${index}`
+    : `factory:exoplanet:${reward.location.exoplanetId}:${index}`;
+}
+
+export function constructModule(
+  current: GameState,
+  playerId: PlayerId,
+  moduleId: string,
+  target: FactoryConstructionTarget,
+): GameState {
+  const currentPlayer = getPlayer(current, playerId);
+  getConnectionReward(current, playerId);
+  const heldModule = currentPlayer.heldModules.find(({ id }) => id === moduleId);
+  if (!heldModule) {
+    throw new GameRuleError(
+      "module-unavailable",
+      "The selected module is not held by this player",
+    );
+  }
+
+  const next = cloneGameState(current);
+  const player = getPlayer(next, playerId);
+  const reward = getConnectionReward(next, playerId);
+  const module = player.heldModules.find(({ id }) => id === moduleId)!;
+  const definition = getModuleDefinition(module.definitionId);
+  const constructionCost = { ...definition.constructionCost };
+  if (reward.location.kind === "exoplanet") {
+    constructionCost.teams = (constructionCost.teams ?? 0) + 1;
+  }
+
+  let factory: Factory;
+  if (target.kind === "factory") {
+    factory = locationFactories(next, playerId, reward).find(
+      ({ id }) => id === target.factoryId,
+    )!;
+    if (!factory) {
+      throw new GameRuleError(
+        "factory-not-found",
+        "The selected factory is not at this connection",
+      );
+    }
+    if (factory.type !== definition.type) {
+      throw new GameRuleError(
+        "factory-type-mismatch",
+        "Every module in a factory must have the same type",
+      );
+    }
+  } else if (reward.location.kind === "home" && target.kind === "new-factory") {
+    factory = {
+      id: createFactoryId(playerId, reward, player.homeFactories.length),
+      type: definition.type,
+      modules: [],
+    };
+    player.homeFactories.push(factory);
+  } else if (
+    reward.location.kind === "exoplanet" &&
+    target.kind === "exoplanet-slot"
+  ) {
+    const exoplanetId = reward.location.exoplanetId;
+    const exoplanet = next.exoplanets.find(
+      ({ id }) => id === exoplanetId,
+    )!;
+    if (
+      !Number.isInteger(target.slotIndex) ||
+      target.slotIndex < 0 ||
+      target.slotIndex >= exoplanet.factorySlots.length ||
+      exoplanet.factorySlots[target.slotIndex] !== null
+    ) {
+      throw new GameRuleError(
+        "factory-slot-unavailable",
+        "The selected exoplanet factory slot is unavailable",
+      );
+    }
+    factory = {
+      id: createFactoryId(playerId, reward, target.slotIndex),
+      type: definition.type,
+      modules: [],
+    };
+    exoplanet.factorySlots[target.slotIndex] = factory;
+  } else {
+    throw new GameRuleError(
+      "factory-slot-unavailable",
+      "This construction target is invalid at the connected location",
+    );
+  }
+
+  payMaterialCost(player, constructionCost);
+  factory.modules.push({ ...module, ownerId: playerId });
+  player.heldModules = player.heldModules.filter(({ id }) => id !== moduleId);
+  return next;
 }
 
 function allPlayersSubmitted(
@@ -647,6 +829,9 @@ export function toPublicGameState(state: GameState): PublicGameState {
       name: player.name,
       connected: player.connected,
       playedCards: player.playedCards,
+      resources: player.resources,
+      heldModules: player.heldModules,
+      homeFactories: player.homeFactories,
       handSize: player.hand.length,
     });
   }

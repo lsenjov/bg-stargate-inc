@@ -3,6 +3,40 @@ export type PlayerId = string;
 export type ExoplanetId = string;
 export type ReconnectToken = string;
 export type CardId = string;
+export type ModuleId = string;
+export type FactoryId = string;
+
+export type MaterialResource =
+  | "energy"
+  | "food"
+  | "ore"
+  | "metal"
+  | "mre"
+  | "teams";
+
+export type Resource = "dollars" | MaterialResource;
+export type ResourceBalances = Record<Resource, number>;
+export type ResourceCost = Partial<Record<MaterialResource, number>>;
+export type FactoryType = "rural" | "underground" | "industrial";
+export type ModuleDefinitionId =
+  | "solar-farm"
+  | "farm"
+  | "mine"
+  | "smelter"
+  | "mre-factory"
+  | "training-center";
+
+export interface ModuleInstance {
+  id: ModuleId;
+  definitionId: ModuleDefinitionId;
+  ownerId: PlayerId | null;
+}
+
+export interface Factory {
+  id: FactoryId;
+  type: FactoryType;
+  modules: ModuleInstance[];
+}
 
 export interface LobbyPlayer {
   id: PlayerId;
@@ -12,6 +46,14 @@ export interface LobbyPlayer {
 }
 
 export interface Exoplanet {
+  id: ExoplanetId;
+  name: string;
+  factorySlots: Array<Factory | null>;
+  moduleDeck: ModuleInstance[];
+  moduleDiscard: ModuleInstance[];
+}
+
+export interface ExoplanetSetup {
   id: ExoplanetId;
   name: string;
 }
@@ -41,7 +83,29 @@ export type SelectionCard = PauseCard | TargetSelectionCard;
 export interface GamePlayer extends LobbyPlayer {
   hand: SelectionCard[];
   playedCards: SelectionCard[];
+  resources: ResourceBalances;
+  heldModules: ModuleInstance[];
+  homeFactories: Factory[];
 }
+
+export type ConnectionRewardLocation =
+  | { kind: "home"; playerId: PlayerId }
+  | { kind: "exoplanet"; exoplanetId: ExoplanetId };
+
+export interface ActiveFactoryRun {
+  factoryId: FactoryId;
+  multiplier: number;
+  nextModuleIndex: number;
+}
+
+export interface ConnectionRewardState {
+  location: ConnectionRewardLocation;
+  stage: "construction" | "production" | "complete";
+  completedFactoryIds: FactoryId[];
+  activeFactory: ActiveFactoryRun | null;
+}
+
+export type GamePhase = "connection-rewards" | "connection-round";
 
 export type RoundPhase =
   | "initial-selection"
@@ -115,9 +179,11 @@ export interface RoundState {
 
 export interface GameState {
   id: string;
+  phase: GamePhase;
   playerOrder: PlayerId[];
   players: Record<PlayerId, GamePlayer>;
   exoplanets: Exoplanet[];
+  connectionRewards: Partial<Record<PlayerId, ConnectionRewardState>>;
   round: RoundState;
 }
 
@@ -155,5 +221,10 @@ export interface GameSetupPlayer {
 export interface GameSetup {
   id: string;
   players: GameSetupPlayer[];
-  exoplanets: Exoplanet[];
+  exoplanets: ExoplanetSetup[];
 }
+
+export type FactoryConstructionTarget =
+  | { kind: "new-factory" }
+  | { kind: "factory"; factoryId: FactoryId }
+  | { kind: "exoplanet-slot"; slotIndex: number };

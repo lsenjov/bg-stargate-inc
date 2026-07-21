@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   GameRuleError,
+  constructModule,
   createGame,
   exoplanetCardId,
   pauseCardId,
@@ -13,7 +14,13 @@ import {
   undoInitialSelection,
   undoPauseSelection,
 } from "./engine.js";
-import type { GameSetup, GameState, PlayerId } from "./model.js";
+import type {
+  ConnectionRewardLocation,
+  GameSetup,
+  GameState,
+  PlayerId,
+} from "./model.js";
+import { startingModuleId } from "./modules.js";
 
 const exoplanets = [
   { id: "earth", name: "Earth" },
@@ -65,6 +72,21 @@ function expectRuleError(
   }
 }
 
+function withConnectionReward(
+  state: GameState,
+  playerId: PlayerId,
+  location: ConnectionRewardLocation,
+): GameState {
+  state.phase = "connection-rewards";
+  state.connectionRewards[playerId] = {
+    location,
+    stage: "construction",
+    completedFactoryIds: [],
+    activeFactory: null,
+  };
+  return state;
+}
+
 describe("game setup", () => {
   it("creates each player's complete selection deck and reconnect state", () => {
     const game = createGame(setup());
@@ -84,6 +106,22 @@ describe("game setup", () => {
       exoplanetCardId("a", "mars"),
       pauseCardId("a"),
     ]);
+    expect(game.players.a?.resources).toEqual({
+      dollars: 20,
+      energy: 6,
+      food: 1,
+      ore: 0,
+      metal: 8,
+      mre: 2,
+      teams: 0,
+    });
+    expect(game.players.a?.heldModules).toHaveLength(6);
+    expect(game.players.a?.homeFactories).toEqual([]);
+    expect(game.exoplanets[0]).toMatchObject({
+      factorySlots: [null, null, null],
+      moduleDeck: [],
+      moduleDiscard: [],
+    });
   });
 
   it.each([
@@ -172,6 +210,141 @@ describe("game setup", () => {
       .toBeNull();
     expect(Object.getPrototypeOf(publicState.round.resolution?.playerResults))
       .toBeNull();
+  });
+});
+
+describe("module construction", () => {
+  it("constructs held modules permanently in ordered home factories", () => {
+    const original = withConnectionReward(
+      createGame(setup()),
+      "a",
+      { kind: "home", playerId: "a" },
+    );
+    const solarId = startingModuleId("a", "solar-farm");
+    const farmId = startingModuleId("a", "farm");
+    const withSolar = constructModule(original, "a", solarId, {
+      kind: "new-factory",
+    });
+    const factoryId = withSolar.players.a!.homeFactories[0]!.id;
+    const withFarm = constructModule(withSolar, "a", farmId, {
+      kind: "factory",
+      factoryId,
+    });
+
+    expect(original.players.a?.homeFactories).toEqual([]);
+    expect(original.players.a?.resources.metal).toBe(8);
+    expect(withFarm.players.a?.homeFactories).toEqual([
+      {
+        id: factoryId,
+        type: "rural",
+        modules: [
+          { id: solarId, definitionId: "solar-farm", ownerId: "a" },
+          { id: farmId, definitionId: "farm", ownerId: "a" },
+        ],
+      },
+    ]);
+    expect(withFarm.players.a?.resources).toMatchObject({
+      metal: 6,
+      energy: 4,
+    });
+    expect(withFarm.players.a?.heldModules.map(({ id }) => id)).not.toContain(
+      solarId,
+    );
+  });
+
+  it("rejects mismatched factories and unavailable held modules", () => {
+    const game = withConnectionReward(
+      createGame(setup()),
+      "a",
+      { kind: "home", playerId: "a" },
+    );
+    const withSolar = constructModule(
+      game,
+      "a",
+      startingModuleId("a", "solar-farm"),
+      { kind: "new-factory" },
+    );
+    const factoryId = withSolar.players.a!.homeFactories[0]!.id;
+
+    expectRuleError(
+      () =>
+        constructModule(
+          withSolar,
+          "a",
+          startingModuleId("a", "mine"),
+          { kind: "factory", factoryId },
+        ),
+      "factory-type-mismatch",
+    );
+    expectRuleError(
+      () =>
+        constructModule(
+          withSolar,
+          "a",
+          startingModuleId("a", "solar-farm"),
+          { kind: "new-factory" },
+        ),
+      "module-unavailable",
+    );
+  });
+
+  it("uses fixed exoplanet slots, charges a Team, and marks ownership", () => {
+    const game = withConnectionReward(
+      createGame(setup()),
+      "a",
+      { kind: "exoplanet", exoplanetId: "earth" },
+    );
+    game.players.a!.resources.teams = 1;
+    const solarId = startingModuleId("a", "solar-farm");
+    const built = constructModule(game, "a", solarId, {
+      kind: "exoplanet-slot",
+      slotIndex: 1,
+    });
+
+    expect(built.exoplanets[0]?.factorySlots).toEqual([
+      null,
+      {
+        id: "factory:exoplanet:earth:1",
+        type: "rural",
+        modules: [
+          { id: solarId, definitionId: "solar-farm", ownerId: "a" },
+        ],
+      },
+      null,
+    ]);
+    expect(built.players.a?.resources).toMatchObject({ metal: 7, teams: 0 });
+    expectRuleError(
+      () =>
+        constructModule(built, "a", startingModuleId("a", "farm"), {
+          kind: "exoplanet-slot",
+          slotIndex: 1,
+        }),
+      "factory-slot-unavailable",
+    );
+  });
+
+  it("keeps economy and factory state in the public game view", () => {
+    const game = withConnectionReward(
+      createGame(setup()),
+      "a",
+      { kind: "home", playerId: "a" },
+    );
+    const built = constructModule(
+      game,
+      "a",
+      startingModuleId("a", "solar-farm"),
+      { kind: "new-factory" },
+    );
+    const publicState = toPublicGameState(built);
+
+    expect(publicState.players.a?.resources).toEqual(
+      built.players.a?.resources,
+    );
+    expect(publicState.players.a?.homeFactories).toEqual(
+      built.players.a?.homeFactories,
+    );
+    expect(publicState.players.a).not.toHaveProperty("reconnectToken");
+    expect(publicState.players.a).not.toHaveProperty("hand");
   });
 });
 
