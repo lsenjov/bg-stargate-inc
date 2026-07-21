@@ -434,6 +434,45 @@ describe("player app", () => {
     expect(socket.commands.some(({ event }) => event === "production:begin")).toBe(true);
   });
 
+  it("falls back when a selected exoplanet slot becomes a factory", async () => {
+    window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
+    const view = factoryRewardView("construction");
+    const game = view.lobby.game!;
+    game.connectionRewards.p1!.location = { kind: "exoplanet", exoplanetId: "alpha" };
+    game.players.p1!.resources.teams = 2;
+    const socket = new FakeSocket();
+    socket.responses.set("lobby:reconnect", { ok: true, data: sessionData(view) });
+    socket.responses.set("factory:construct", { ok: true, data: view });
+    render(<App socket={asSocket(socket)} />);
+
+    const solarTarget = await screen.findByLabelText("Factory target for Solar Farm") as HTMLSelectElement;
+    const farmTarget = screen.getByLabelText("Factory target for Farm") as HTMLSelectElement;
+    fireEvent.change(solarTarget, { target: { value: "slot:1" } });
+    fireEvent.change(farmTarget, { target: { value: "slot:1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Construct Solar Farm" }));
+
+    const updated = structuredClone(view);
+    const updatedGame = updated.lobby.game!;
+    const solar = updatedGame.players.p1!.heldModules.find(({ definitionId }) => definitionId === "solar-farm")!;
+    updatedGame.players.p1!.heldModules = updatedGame.players.p1!.heldModules.filter(({ id }) => id !== solar.id);
+    updatedGame.exoplanets[0]!.factorySlots[1] = {
+      id: "factory:exoplanet:alpha:1",
+      type: "rural",
+      modules: [{ ...solar, ownerId: "p1" }],
+    };
+    act(() => socket.serverEmit("lobby:state", updated));
+
+    expect((screen.getByLabelText("Factory target for Farm") as HTMLSelectElement).value).toBe("factory:factory:exoplanet:alpha:1");
+    fireEvent.click(screen.getByRole("button", { name: "Construct Farm" }));
+    expect(socket.commands.at(-1)).toEqual({
+      event: "factory:construct",
+      payload: {
+        moduleId: "module:p1:farm",
+        target: { kind: "factory", factoryId: "factory:exoplanet:alpha:1" },
+      },
+    });
+  });
+
   it("lets the player choose the next factory multiplier and finish production", async () => {
     window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const view = factoryRewardView("production");
@@ -446,7 +485,7 @@ describe("player app", () => {
     expect(await screen.findByRole("heading", { name: "Operate your home planet" })).toBeTruthy();
     const farmCard = screen.getByText("Farm", { selector: ".factory-run-card li strong" }).closest("article");
     expect(farmCard).toBeTruthy();
-    fireEvent.click(within(farmCard as HTMLElement).getByRole("button", { name: "Run module" }));
+    fireEvent.click(within(farmCard as HTMLElement).getByRole("button", { name: "Run Farm in factory 2 at 1x" }));
     expect(socket.commands).toContainEqual({
       event: "production:run",
       payload: { factoryId: "factory:home:p1:1" },

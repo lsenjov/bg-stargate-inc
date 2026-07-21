@@ -132,8 +132,8 @@ function ConstructionPanel({ socket, view, unavailable, pending, run, reward }: 
   const isExoplanet = reward.location.kind === "exoplanet";
 
   const construct = (module: ModuleInstance, options: TargetOption[]) => {
-    const selectedKey = targets[module.id] ?? options[0]?.key;
-    const target = options.find(({ key }) => key === selectedKey)?.target;
+    const selectedOption = options.find(({ key }) => key === targets[module.id]) ?? options[0];
+    const target = selectedOption?.target;
     if (!target) return;
     const definition = getModuleDefinition(module.definitionId);
     run(`Constructing ${definition.name}`, (callback) =>
@@ -146,7 +146,7 @@ function ConstructionPanel({ socket, view, unavailable, pending, run, reward }: 
     {self.heldModules.length > 0 ? <div className="blueprint-grid">{self.heldModules.map((module) => {
       const definition = getModuleDefinition(module.definitionId);
       const options = constructionTargets(view, reward, module);
-      const selected = targets[module.id] ?? options[0]?.key ?? "";
+      const selected = options.find(({ key }) => key === targets[module.id])?.key ?? options[0]?.key ?? "";
       const affordable = canAffordMaterials(self.resources, definition.constructionCost, isExoplanet);
       return <article className={`module-blueprint ${definition.type}`} key={module.id}>
         <span className="blueprint-type">{definition.type}</span><h3>{definition.name}</h3>
@@ -184,7 +184,7 @@ function ProductionPanel({ socket, view, unavailable, pending, run, reward }: Fa
       return <article className={`factory-run-card ${active ? "active" : ""} ${completed ? "completed" : ""}`} key={factory.id}>
         <header><div><span>FACTORY {String(placementIndex + 1).padStart(2, "0")}</span><h3>{factory.type}</h3></div><strong>{completed ? "DONE" : `${multiplier}×`}</strong></header>
         <ol>{factory.modules.map((factoryModule, index) => <li className={active && index === moduleIndex ? "next" : ""} key={factoryModule.id}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{getModuleDefinition(factoryModule.definitionId).name}</strong><small>Owned by {view.lobby.players[factoryModule.ownerId ?? ""]?.name ?? "Unowned"}</small></div></li>)}</ol>
-        {!completed && definition && <div className="run-controls"><div><span>NEXT RUN</span><strong>{definition.name}</strong><small>${definition.runningCost * multiplier} + <CostLine cost={definition.inputs} /></small></div><button disabled={unavailable || blocked || !affordable} onClick={() => run(`Running ${definition.name}`, (callback) => socket.emit("production:run", { factoryId: factory.id }, callback))}>{pending === `Running ${definition.name}` ? "Running…" : blocked ? "Finish active factory" : affordable ? "Run module" : "Cannot afford"}</button></div>}
+        {!completed && definition && <div className="run-controls"><div><span>NEXT RUN</span><strong>{definition.name}</strong><small>${definition.runningCost * multiplier} + <CostLine cost={definition.inputs} /></small></div><button aria-label={`Run ${definition.name} in factory ${placementIndex + 1} at ${multiplier}x`} disabled={unavailable || blocked || !affordable} onClick={() => run(`Running ${definition.name}`, (callback) => socket.emit("production:run", { factoryId: factory.id }, callback))}>{pending === `Running ${definition.name}` ? "Running…" : blocked ? "Finish active factory" : affordable ? "Run module" : "Cannot afford"}</button></div>}
         {active && <button className="stop-factory" disabled={unavailable} onClick={() => run("Stopping factory", (callback) => socket.emit("production:stop-factory", {}, callback))}>Stop this factory</button>}
       </article>;
     })}</div> : <div className="factory-empty"><strong>No factories at this connection</strong><p>Finish the connection or return to construction on a later visit.</p></div>}

@@ -353,7 +353,7 @@ function WelcomeScreen({ socket, unavailable, pending, run, onSession, openRuleb
         <button className="primary-button light" disabled={unavailable || !name.trim() || joinCode.length !== 10}>{pending === "Joining lobby" ? "Joining channel…" : "Join lobby"}<span aria-hidden="true">→</span></button>
       </form>
     </section>
-    <section className="manifest-strip" aria-label="Current game scope"><div><strong>Playable now</strong><span>Connection-selection rounds</span></div><div><strong>Always online</strong><span>Secure reconnect to your seat</span></div><div><strong>In development</strong><span>Rewards, economy &amp; full game</span></div></section>
+    <section className="manifest-strip" aria-label="Current game scope"><div><strong>Playable now</strong><span>Connection-selection rounds</span></div><div><strong>Always online</strong><span>Secure reconnect to your seat</span></div><div><strong>In development</strong><span>Trade, scoring &amp; full game</span></div></section>
   </main>;
 }
 
