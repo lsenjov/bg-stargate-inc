@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   getModuleDefinition,
@@ -129,7 +129,19 @@ function constructionTargets(
 function ConstructionPanel({ socket, view, unavailable, pending, run, reward }: FactoryPanelProps & { reward: ConnectionRewardState }) {
   const self = view.lobby.game!.players[view.self.playerId]!;
   const [targets, setTargets] = useState<Record<string, string>>({});
+  const panelRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const focusedModuleId = useRef<string | null>(null);
   const isExoplanet = reward.location.kind === "exoplanet";
+
+  useEffect(() => {
+    const moduleId = focusedModuleId.current;
+    if (!moduleId || self.heldModules.some(({ id }) => id === moduleId)) return;
+    focusedModuleId.current = null;
+    if (document.activeElement !== document.body) return;
+    const nextAction = panelRef.current?.querySelector<HTMLButtonElement>(".construct-button:not(:disabled)");
+    (nextAction ?? headingRef.current)?.focus();
+  }, [self.heldModules]);
 
   const construct = (module: ModuleInstance, options: TargetOption[]) => {
     const selectedOption = options.find(({ key }) => key === targets[module.id]) ?? options[0];
@@ -141,8 +153,8 @@ function ConstructionPanel({ socket, view, unavailable, pending, run, reward }: 
     );
   };
 
-  return <section className="panel factory-action-panel" aria-labelledby="factory-action-title">
-    <div className="factory-action-head"><div><div className="eyebrow">CONNECTION ACTION // CONSTRUCTION</div><h2 id="factory-action-title">Build at {locationName(view, reward)}</h2><p>Install held modules now, or keep them for a later connection. Placement and module order are permanent.</p></div><ResourceStrip resources={self.resources} /></div>
+  return <section ref={panelRef} className="panel factory-action-panel" aria-labelledby="factory-action-title">
+    <div className="factory-action-head"><div><div className="eyebrow">CONNECTION ACTION // CONSTRUCTION</div><h2 ref={headingRef} id="factory-action-title" tabIndex={-1}>Build at {locationName(view, reward)}</h2><p>Install held modules now, or keep them for a later connection. Placement and module order are permanent.</p></div><ResourceStrip resources={self.resources} /></div>
     {self.heldModules.length > 0 ? <div className="blueprint-grid">{self.heldModules.map((module) => {
       const definition = getModuleDefinition(module.definitionId);
       const options = constructionTargets(view, reward, module);
@@ -152,7 +164,10 @@ function ConstructionPanel({ socket, view, unavailable, pending, run, reward }: 
         <span className="blueprint-type">{definition.type}</span><h3>{definition.name}</h3>
         <div className="module-spec"><span>BUILD</span><CostLine cost={definition.constructionCost} teamSurcharge={isExoplanet} /></div>
         <label>Install into<select aria-label={`Factory target for ${definition.name}`} value={selected} disabled={unavailable || options.length === 0} onChange={(event) => setTargets((current) => ({ ...current, [module.id]: event.target.value }))}>{options.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
-        <button className="construct-button" disabled={unavailable || !affordable || options.length === 0} onClick={() => construct(module, options)}>{pending === `Constructing ${definition.name}` ? "Constructing…" : affordable ? `Construct ${definition.name}` : "Resources required"}</button>
+        <button className="construct-button" disabled={unavailable || !affordable || options.length === 0} onClick={(event) => {
+          if (document.activeElement === event.currentTarget) focusedModuleId.current = module.id;
+          construct(module, options);
+        }}>{pending === `Constructing ${definition.name}` ? "Constructing…" : affordable ? `Construct ${definition.name}` : "Resources required"}</button>
       </article>;
     })}</div> : <div className="factory-empty"><strong>All held modules installed</strong><p>No modules remain in your inventory.</p></div>}
     <div className="factory-action-footer"><button className="quiet-button" disabled={unavailable} onClick={() => run("Finishing connection", (callback) => socket.emit("connection:finish", {}, callback))}>Finish without production</button><button className="primary-button" disabled={unavailable} onClick={() => run("Starting production", (callback) => socket.emit("production:begin", {}, callback))}>{pending === "Starting production" ? "Starting…" : "Continue to production"}<span aria-hidden="true">→</span></button></div>
@@ -170,8 +185,21 @@ function ProductionPanel({ socket, view, unavailable, pending, run, reward }: Fa
   const self = view.lobby.game!.players[view.self.playerId]!;
   const factories = locationFactories(view, reward);
   const nextMultiplier = reward.completedFactoryIds.length + 1;
-  return <section className="panel factory-action-panel" aria-labelledby="factory-action-title">
-    <div className="factory-action-head"><div><div className="eyebrow">CONNECTION ACTION // PRODUCTION</div><h2 id="factory-action-title">Operate {locationName(view, reward)}</h2><p>Choose any unrun factory. Its multiplier applies to dollar running costs only; outputs are available immediately.</p></div><ResourceStrip resources={self.resources} /></div>
+  const panelRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const focusedFactoryId = useRef<string | null>(null);
+
+  useEffect(() => {
+    const factoryId = focusedFactoryId.current;
+    if (!factoryId || !reward.completedFactoryIds.includes(factoryId)) return;
+    focusedFactoryId.current = null;
+    if (document.activeElement !== document.body) return;
+    const nextAction = panelRef.current?.querySelector<HTMLButtonElement>(".run-controls button:not(:disabled)");
+    (nextAction ?? headingRef.current)?.focus();
+  }, [reward.completedFactoryIds]);
+
+  return <section ref={panelRef} className="panel factory-action-panel" aria-labelledby="factory-action-title">
+    <div className="factory-action-head"><div><div className="eyebrow">CONNECTION ACTION // PRODUCTION</div><h2 ref={headingRef} id="factory-action-title" tabIndex={-1}>Operate {locationName(view, reward)}</h2><p>Choose any unrun factory. Its multiplier applies to dollar running costs only; outputs are available immediately.</p></div><ResourceStrip resources={self.resources} /></div>
     {factories.length ? <div className="factory-run-grid">{factories.map((factory, placementIndex) => {
       const completed = reward.completedFactoryIds.includes(factory.id);
       const active = reward.activeFactory?.factoryId === factory.id;
@@ -184,8 +212,14 @@ function ProductionPanel({ socket, view, unavailable, pending, run, reward }: Fa
       return <article className={`factory-run-card ${active ? "active" : ""} ${completed ? "completed" : ""}`} key={factory.id}>
         <header><div><span>FACTORY {String(placementIndex + 1).padStart(2, "0")}</span><h3>{factory.type}</h3></div><strong>{completed ? "DONE" : `${multiplier}×`}</strong></header>
         <ol>{factory.modules.map((factoryModule, index) => <li className={active && index === moduleIndex ? "next" : ""} key={factoryModule.id}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{getModuleDefinition(factoryModule.definitionId).name}</strong><small>Owned by {view.lobby.players[factoryModule.ownerId ?? ""]?.name ?? "Unowned"}</small></div></li>)}</ol>
-        {!completed && definition && <div className="run-controls"><div><span>NEXT RUN</span><strong>{definition.name}</strong><small>${definition.runningCost * multiplier} + <CostLine cost={definition.inputs} /></small></div><button aria-label={`Run ${definition.name} in factory ${placementIndex + 1} at ${multiplier}x`} disabled={unavailable || blocked || !affordable} onClick={() => run(`Running ${definition.name}`, (callback) => socket.emit("production:run", { factoryId: factory.id }, callback))}>{pending === `Running ${definition.name}` ? "Running…" : blocked ? "Finish active factory" : affordable ? "Run module" : "Cannot afford"}</button></div>}
-        {active && <button className="stop-factory" disabled={unavailable} onClick={() => run("Stopping factory", (callback) => socket.emit("production:stop-factory", {}, callback))}>Stop this factory</button>}
+        {!completed && definition && <div className="run-controls"><div><span>NEXT RUN</span><strong>{definition.name}</strong><small>${definition.runningCost * multiplier} + <CostLine cost={definition.inputs} /></small></div><button aria-label={`Run ${definition.name} in factory ${placementIndex + 1} at ${multiplier}x`} disabled={unavailable || blocked || !affordable} onClick={(event) => {
+          if (document.activeElement === event.currentTarget) focusedFactoryId.current = factory.id;
+          run(`Running ${definition.name}`, (callback) => socket.emit("production:run", { factoryId: factory.id }, callback));
+        }}>{pending === `Running ${definition.name}` ? "Running…" : blocked ? "Finish active factory" : affordable ? "Run module" : "Cannot afford"}</button></div>}
+        {active && <button className="stop-factory" disabled={unavailable} onClick={(event) => {
+          if (document.activeElement === event.currentTarget) focusedFactoryId.current = factory.id;
+          run("Stopping factory", (callback) => socket.emit("production:stop-factory", {}, callback));
+        }}>Stop this factory</button>}
       </article>;
     })}</div> : <div className="factory-empty"><strong>No factories at this connection</strong><p>Finish the connection or return to construction on a later visit.</p></div>}
     <div className="factory-action-footer production-finish"><span>{reward.completedFactoryIds.length} factories operated</span><button className="primary-button light" disabled={unavailable || Boolean(reward.activeFactory)} onClick={() => run("Finishing connection", (callback) => socket.emit("connection:finish", {}, callback))}>{pending === "Finishing connection" ? "Finishing…" : "Finish connection"}<span aria-hidden="true">→</span></button></div>

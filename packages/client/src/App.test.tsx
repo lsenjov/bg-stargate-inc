@@ -435,6 +435,7 @@ describe("player app", () => {
   });
 
   it("falls back when a selected exoplanet slot becomes a factory", async () => {
+    const user = userEvent.setup();
     window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const view = factoryRewardView("construction");
     const game = view.lobby.game!;
@@ -449,7 +450,7 @@ describe("player app", () => {
     const farmTarget = screen.getByLabelText("Factory target for Farm") as HTMLSelectElement;
     fireEvent.change(solarTarget, { target: { value: "slot:1" } });
     fireEvent.change(farmTarget, { target: { value: "slot:1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Construct Solar Farm" }));
+    await user.click(screen.getByRole("button", { name: "Construct Solar Farm" }));
 
     const updated = structuredClone(view);
     const updatedGame = updated.lobby.game!;
@@ -463,6 +464,7 @@ describe("player app", () => {
     act(() => socket.serverEmit("lobby:state", updated));
 
     expect((screen.getByLabelText("Factory target for Farm") as HTMLSelectElement).value).toBe("factory:factory:exoplanet:alpha:1");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Construct Farm" }));
     fireEvent.click(screen.getByRole("button", { name: "Construct Farm" }));
     expect(socket.commands.at(-1)).toEqual({
       event: "factory:construct",
@@ -474,6 +476,7 @@ describe("player app", () => {
   });
 
   it("lets the player choose the next factory multiplier and finish production", async () => {
+    const user = userEvent.setup();
     window.localStorage.setItem("stargate-inc-session-v1", JSON.stringify({ lobbyId: "lobby-one", playerId: "p1", reconnectToken: "token" }));
     const view = factoryRewardView("production");
     const socket = new FakeSocket();
@@ -485,11 +488,15 @@ describe("player app", () => {
     expect(await screen.findByRole("heading", { name: "Operate your home planet" })).toBeTruthy();
     const farmCard = screen.getByText("Farm", { selector: ".factory-run-card li strong" }).closest("article");
     expect(farmCard).toBeTruthy();
-    fireEvent.click(within(farmCard as HTMLElement).getByRole("button", { name: "Run Farm in factory 2 at 1x" }));
+    await user.click(within(farmCard as HTMLElement).getByRole("button", { name: "Run Farm in factory 2 at 1x" }));
     expect(socket.commands).toContainEqual({
       event: "production:run",
       payload: { factoryId: "factory:home:p1:1" },
     });
+    const updated = structuredClone(view);
+    updated.lobby.game!.connectionRewards.p1!.completedFactoryIds = ["factory:home:p1:1"];
+    act(() => socket.serverEmit("lobby:state", updated));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Run Solar Farm in factory 1 at 2x" }));
     fireEvent.click(screen.getByRole("button", { name: "Finish connection" }));
     expect(socket.commands.some(({ event }) => event === "connection:finish")).toBe(true);
     expect(screen.getByRole("heading", { name: "Factories and balances" })).toBeTruthy();
