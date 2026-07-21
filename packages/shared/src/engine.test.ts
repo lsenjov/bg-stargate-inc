@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   GameRuleError,
+  beginProduction,
   constructModule,
   createGame,
   exoplanetCardId,
+  finishConnectionReward,
   pauseCardId,
   playerCardId,
+  runNextFactoryModule,
   startNextRound,
+  stopActiveFactory,
   submitInitialSelection,
   submitPauseSelection,
   toPublicGameState,
@@ -85,6 +89,16 @@ function withConnectionReward(
     activeFactory: null,
   };
   return state;
+}
+
+function finishAllConnectionRewards(state: GameState): GameState {
+  return Object.entries(state.connectionRewards).reduce(
+    (next, [playerId, reward]) =>
+      reward?.stage === "complete"
+        ? next
+        : finishConnectionReward(next, playerId),
+    state,
+  );
 }
 
 describe("game setup", () => {
@@ -459,10 +473,14 @@ describe("initial selection and resolution", () => {
       c: { status: "failed", reason: "player-choice-not-mutual" },
     });
     expect(game.round.resolution?.unresolvedEffects).toEqual([
-      { kind: "internal-production", playerId: "b" },
       { kind: "compensation", playerId: "a" },
       { kind: "compensation", playerId: "c" },
     ]);
+    expect(game.phase).toBe("connection-rewards");
+    expect(game.connectionRewards.b?.location).toEqual({
+      kind: "home",
+      playerId: "b",
+    });
   });
 
   it("fails every simultaneous claimant to an exoplanet", () => {
@@ -485,7 +503,8 @@ describe("initial selection and resolution", () => {
       b: playerCardId("b", "b"),
       c: exoplanetCardId("c", "mars"),
     });
-    const secondStart = startNextRound(first);
+    expectRuleError(() => startNextRound(first), "wrong-phase");
+    const secondStart = startNextRound(finishAllConnectionRewards(first));
 
     expect(secondStart.players.a?.playedCards.map(({ id }) => id)).toEqual([
       exoplanetCardId("a", "earth"),
@@ -510,6 +529,169 @@ describe("initial selection and resolution", () => {
     expect(second.players.a?.hand.map(({ id }) => id)).toContain(
       exoplanetCardId("a", "earth"),
     );
+  });
+});
+
+describe("factory production", () => {
+  function selfConnectionGame(playerId: PlayerId = "a"): GameState {
+    const game = chooseInitial(createGame(setup()), {
+      a: playerCardId("a", "a"),
+      b: playerCardId("b", "b"),
+      c: playerCardId("c", "c"),
+    });
+    expect(game.connectionRewards[playerId]?.location).toEqual({
+      kind: "home",
+      playerId,
+    });
+    return game;
+  }
+
+  it("chains immediate outputs through oldest-first modules", () => {
+    let game = selfConnectionGame();
+    game = constructModule(
+      game,
+      "a",
+      startingModuleId("a", "solar-farm"),
+      { kind: "new-factory" },
+    );
+    const factoryId = game.players.a!.homeFactories[0]!.id;
+    game = constructModule(game, "a", startingModuleId("a", "farm"), {
+      kind: "factory",
+      factoryId,
+    });
+    game = beginProduction(game, "a");
+    game = runNextFactoryModule(game, "a", factoryId);
+
+    expect(game.players.a?.resources).toMatchObject({
+      dollars: 19,
+      energy: 7,
+      food: 1,
+    });
+    expect(game.connectionRewards.a?.activeFactory).toMatchObject({
+      factoryId,
+      multiplier: 1,
+      nextModuleIndex: 1,
+    });
+
+    game = runNextFactoryModule(game, "a", factoryId);
+    expect(game.players.a?.resources).toMatchObject({
+      dollars: 18,
+      energy: 6,
+      food: 2,
+    });
+    expect(game.connectionRewards.a?.activeFactory).toBeNull();
+    expect(game.connectionRewards.a?.completedFactoryIds).toEqual([factoryId]);
+  });
+
+  it("assigns multipliers in the player's chosen order without multiplying inputs", () => {
+    let game = selfConnectionGame();
+    game = constructModule(
+      game,
+      "a",
+      startingModuleId("a", "solar-farm"),
+      { kind: "new-factory" },
+    );
+    const solarFactoryId = game.players.a!.homeFactories[0]!.id;
+    game = constructModule(game, "a", startingModuleId("a", "farm"), {
+      kind: "new-factory",
+    });
+    const farmFactoryId = game.players.a!.homeFactories[1]!.id;
+    game = beginProduction(game, "a");
+    game = runNextFactoryModule(game, "a", farmFactoryId);
+    game = runNextFactoryModule(game, "a", solarFactoryId);
+
+    expect(game.connectionRewards.a?.completedFactoryIds).toEqual([
+      farmFactoryId,
+      solarFactoryId,
+    ]);
+    expect(game.players.a?.resources).toMatchObject({
+      dollars: 17,
+      energy: 6,
+      food: 2,
+    });
+  });
+
+  it("stops an active prefix and prevents the factory from running twice", () => {
+    let game = selfConnectionGame();
+    game = constructModule(
+      game,
+      "a",
+      startingModuleId("a", "solar-farm"),
+      { kind: "new-factory" },
+    );
+    const factoryId = game.players.a!.homeFactories[0]!.id;
+    game = constructModule(game, "a", startingModuleId("a", "farm"), {
+      kind: "factory",
+      factoryId,
+    });
+    game = beginProduction(game, "a");
+    game = runNextFactoryModule(game, "a", factoryId);
+
+    expectRuleError(
+      () => finishConnectionReward(game, "a"),
+      "factory-run-unavailable",
+    );
+    const stopped = stopActiveFactory(game, "a");
+    expect(stopped.connectionRewards.a?.completedFactoryIds).toEqual([
+      factoryId,
+    ]);
+    expectRuleError(
+      () => runNextFactoryModule(stopped, "a", factoryId),
+      "factory-already-operated",
+    );
+  });
+
+  it("lets an exoplanet visitor pay for and receive output from every owner", () => {
+    let game = withConnectionReward(
+      createGame(setup()),
+      "a",
+      { kind: "exoplanet", exoplanetId: "earth" },
+    );
+    game.players.a!.resources.teams = 1;
+    game = constructModule(
+      game,
+      "a",
+      startingModuleId("a", "solar-farm"),
+      { kind: "exoplanet-slot", slotIndex: 0 },
+    );
+    const factoryId = game.exoplanets[0]!.factorySlots[0]!.id;
+    game.phase = "connection-rewards";
+    game.connectionRewards = {
+      b: {
+        location: { kind: "exoplanet", exoplanetId: "earth" },
+        stage: "construction",
+        completedFactoryIds: [],
+        activeFactory: null,
+      },
+    };
+    game.players.b!.resources.teams = 1;
+    game = constructModule(game, "b", startingModuleId("b", "farm"), {
+      kind: "factory",
+      factoryId,
+    });
+    game = beginProduction(game, "b");
+    game = runNextFactoryModule(game, "b", factoryId);
+    game = runNextFactoryModule(game, "b", factoryId);
+
+    expect(game.exoplanets[0]?.factorySlots[0]?.modules.map(({ ownerId }) =>
+      ownerId
+    )).toEqual(["a", "b"]);
+    expect(game.players.b?.resources).toMatchObject({
+      dollars: 18,
+      energy: 6,
+      food: 2,
+    });
+    expect(game.players.a?.resources.dollars).toBe(20);
+  });
+
+  it("keeps the next round closed until every connection reward finishes", () => {
+    let game = selfConnectionGame();
+    expect(game.phase).toBe("connection-rewards");
+    expectRuleError(() => startNextRound(game), "wrong-phase");
+
+    game = finishAllConnectionRewards(game);
+    expect(game.phase).toBe("connection-round");
+    expect(startNextRound(game).round.number).toBe(2);
   });
 });
 

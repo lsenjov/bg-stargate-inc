@@ -43,7 +43,9 @@ export type GameRuleErrorCode =
   | "insufficient-resources"
   | "factory-not-found"
   | "factory-type-mismatch"
-  | "factory-slot-unavailable";
+  | "factory-slot-unavailable"
+  | "factory-already-operated"
+  | "factory-run-unavailable";
 
 export class GameRuleError extends Error {
   constructor(
@@ -322,6 +324,12 @@ export function constructModule(
   const next = cloneGameState(current);
   const player = getPlayer(next, playerId);
   const reward = getConnectionReward(next, playerId);
+  if (reward.stage !== "construction") {
+    throw new GameRuleError(
+      "connection-reward-unavailable",
+      "Construction has closed for this connection",
+    );
+  }
   const module = player.heldModules.find(({ id }) => id === moduleId)!;
   const definition = getModuleDefinition(module.definitionId);
   const constructionCost = { ...definition.constructionCost };
@@ -344,6 +352,15 @@ export function constructModule(
       throw new GameRuleError(
         "factory-type-mismatch",
         "Every module in a factory must have the same type",
+      );
+    }
+    if (
+      reward.completedFactoryIds.includes(factory.id) ||
+      reward.activeFactory?.factoryId === factory.id
+    ) {
+      throw new GameRuleError(
+        "factory-already-operated",
+        "A factory cannot receive modules after operating during this connection",
       );
     }
   } else if (reward.location.kind === "home" && target.kind === "new-factory") {
@@ -391,6 +408,164 @@ export function constructModule(
   return next;
 }
 
+function requireProductionReward(
+  state: GameState,
+  playerId: PlayerId,
+): ConnectionRewardState {
+  const reward = getConnectionReward(state, playerId);
+  if (reward.stage !== "production") {
+    throw new GameRuleError(
+      "factory-run-unavailable",
+      "Factory production has not started for this connection",
+    );
+  }
+  return reward;
+}
+
+export function beginProduction(
+  current: GameState,
+  playerId: PlayerId,
+): GameState {
+  const reward = getConnectionReward(current, playerId);
+  if (reward.stage !== "construction") {
+    throw new GameRuleError(
+      "factory-run-unavailable",
+      "Factory production has already started",
+    );
+  }
+  const next = cloneGameState(current);
+  next.connectionRewards[playerId]!.stage = "production";
+  return next;
+}
+
+function payModuleRun(
+  player: GamePlayer,
+  factory: Factory,
+  moduleIndex: number,
+  multiplier: number,
+): void {
+  const module = factory.modules[moduleIndex];
+  if (!module) {
+    throw new GameRuleError(
+      "factory-run-unavailable",
+      "Every module in this factory has already operated",
+    );
+  }
+  const definition = getModuleDefinition(module.definitionId);
+  const dollarCost = definition.runningCost * multiplier;
+  if (
+    player.resources.dollars < dollarCost ||
+    !canPay(player, definition.inputs)
+  ) {
+    throw new GameRuleError(
+      "insufficient-resources",
+      "The player cannot afford to run this module",
+    );
+  }
+  player.resources.dollars -= dollarCost;
+  for (const resource of materialResources) {
+    player.resources[resource] -= definition.inputs[resource] ?? 0;
+    player.resources[resource] += definition.outputs[resource] ?? 0;
+  }
+}
+
+export function runNextFactoryModule(
+  current: GameState,
+  playerId: PlayerId,
+  factoryId: string,
+): GameState {
+  const currentReward = requireProductionReward(current, playerId);
+  if (
+    currentReward.activeFactory &&
+    currentReward.activeFactory.factoryId !== factoryId
+  ) {
+    throw new GameRuleError(
+      "factory-run-unavailable",
+      "Finish or stop the active factory before choosing another",
+    );
+  }
+  if (currentReward.completedFactoryIds.includes(factoryId)) {
+    throw new GameRuleError(
+      "factory-already-operated",
+      "This factory has already operated during the connection",
+    );
+  }
+  const currentFactory = locationFactories(current, playerId, currentReward).find(
+    ({ id }) => id === factoryId,
+  );
+  if (!currentFactory) {
+    throw new GameRuleError(
+      "factory-not-found",
+      "The selected factory is not at this connection",
+    );
+  }
+
+  const next = cloneGameState(current);
+  const player = getPlayer(next, playerId);
+  const reward = requireProductionReward(next, playerId);
+  const factory = locationFactories(next, playerId, reward).find(
+    ({ id }) => id === factoryId,
+  )!;
+  reward.activeFactory ??= {
+    factoryId,
+    multiplier: reward.completedFactoryIds.length + 1,
+    nextModuleIndex: 0,
+  };
+  const activeFactory = reward.activeFactory;
+  payModuleRun(
+    player,
+    factory,
+    activeFactory.nextModuleIndex,
+    activeFactory.multiplier,
+  );
+  activeFactory.nextModuleIndex += 1;
+  if (activeFactory.nextModuleIndex === factory.modules.length) {
+    reward.completedFactoryIds.push(factoryId);
+    reward.activeFactory = null;
+  }
+  return next;
+}
+
+export function stopActiveFactory(
+  current: GameState,
+  playerId: PlayerId,
+): GameState {
+  const currentReward = requireProductionReward(current, playerId);
+  if (!currentReward.activeFactory) {
+    throw new GameRuleError(
+      "factory-run-unavailable",
+      "This player does not have an active factory",
+    );
+  }
+  const next = cloneGameState(current);
+  const reward = requireProductionReward(next, playerId);
+  reward.completedFactoryIds.push(reward.activeFactory!.factoryId);
+  reward.activeFactory = null;
+  return next;
+}
+
+export function finishConnectionReward(
+  current: GameState,
+  playerId: PlayerId,
+): GameState {
+  const currentReward = getConnectionReward(current, playerId);
+  if (currentReward.activeFactory) {
+    throw new GameRuleError(
+      "factory-run-unavailable",
+      "Finish or stop the active factory before ending the connection",
+    );
+  }
+  const next = cloneGameState(current);
+  next.connectionRewards[playerId]!.stage = "complete";
+  const allComplete = Object.values(next.connectionRewards).every(
+    (reward) => reward?.stage === "complete",
+  );
+  if (allComplete) {
+    next.phase = "connection-round";
+  }
+  return next;
+}
+
 function allPlayersSubmitted(
   playerIds: PlayerId[],
   selections: Partial<Record<PlayerId, SelectionCard>>,
@@ -426,7 +601,10 @@ export function submitInitialSelection(
   playerId: PlayerId,
   cardId: CardId,
 ): GameState {
-  if (current.round.phase !== "initial-selection") {
+  if (
+    current.phase !== "connection-round" ||
+    current.round.phase !== "initial-selection"
+  ) {
     throw new GameRuleError(
       "wrong-phase",
       "Initial selections are closed for this round",
@@ -478,7 +656,10 @@ export function undoInitialSelection(
   current: GameState,
   playerId: PlayerId,
 ): GameState {
-  if (current.round.phase !== "initial-selection") {
+  if (
+    current.phase !== "connection-round" ||
+    current.round.phase !== "initial-selection"
+  ) {
     throw new GameRuleError(
       "wrong-phase",
       "Initial selections are closed for this round",
@@ -502,7 +683,10 @@ export function submitPauseSelection(
   playerId: PlayerId,
   cardId: CardId,
 ): GameState {
-  if (current.round.phase !== "pause-selection") {
+  if (
+    current.phase !== "connection-round" ||
+    current.round.phase !== "pause-selection"
+  ) {
     throw new GameRuleError(
       "wrong-phase",
       "Pause follow-up selections are not open",
@@ -563,7 +747,10 @@ export function undoPauseSelection(
   current: GameState,
   playerId: PlayerId,
 ): GameState {
-  if (current.round.phase !== "pause-selection") {
+  if (
+    current.phase !== "connection-round" ||
+    current.round.phase !== "pause-selection"
+  ) {
     throw new GameRuleError(
       "wrong-phase",
       "Pause follow-up selections are not open",
@@ -728,8 +915,6 @@ function effectsFor(
   for (const connection of connections) {
     if (connection.kind === "player") {
       effects.push({ kind: "trade", playerIds: connection.playerIds });
-    } else if (connection.kind === "self") {
-      effects.push({ kind: "internal-production", playerId: connection.playerId });
     }
   }
   for (const playerId of playerOrder) {
@@ -803,17 +988,46 @@ function finalizeRound(state: GameState): GameState {
       restorePlayedCards(state.players[connection.playerId]!);
     }
   }
+  const rewards = createPlayerRecord<ConnectionRewardState>();
+  for (const connection of state.round.resolution.connections) {
+    if (connection.kind === "self") {
+      setPlayerRecordValue<ConnectionRewardState>(rewards, connection.playerId, {
+        location: { kind: "home", playerId: connection.playerId },
+        stage: "construction",
+        completedFactoryIds: [],
+        activeFactory: null,
+      });
+    } else if (connection.kind === "exoplanet") {
+      setPlayerRecordValue<ConnectionRewardState>(rewards, connection.playerId, {
+        location: {
+          kind: "exoplanet",
+          exoplanetId: connection.exoplanetId,
+        },
+        stage: "construction",
+        completedFactoryIds: [],
+        activeFactory: null,
+      });
+    }
+  }
+  state.connectionRewards = rewards;
+  state.phase = Object.keys(rewards).length > 0
+    ? "connection-rewards"
+    : "connection-round";
   return state;
 }
 
 export function startNextRound(current: GameState): GameState {
-  if (current.round.phase !== "resolved") {
+  if (
+    current.phase !== "connection-round" ||
+    current.round.phase !== "resolved"
+  ) {
     throw new GameRuleError(
       "wrong-phase",
       "A new round can start only after resolution",
     );
   }
   const next = cloneGameState(current);
+  next.connectionRewards = createPlayerRecord();
   next.round = createRound(current.round.number + 1);
   return next;
 }
